@@ -55,6 +55,10 @@ class SessionStore:
                     session_id INTEGER PRIMARY KEY,
                     json TEXT
                 );
+                CREATE TABLE IF NOT EXISTS session_baby_focus (
+                    session_id INTEGER PRIMARY KEY,
+                    baby_id INTEGER
+                );
                 """
             )
             conn.commit()
@@ -137,5 +141,23 @@ class SessionStore:
             conn.execute(
                 "INSERT OR REPLACE INTO constraints(session_id, json) VALUES(?, ?)",
                 (session_id, constraints.to_json()),
+            )
+            conn.commit()
+
+    # ---------- 本会话焦点宝宝（MOD-baby-profile：代词/快速切换消歧）----------
+    def get_focus_baby(self, session_id: int) -> Optional[int]:
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT baby_id FROM session_baby_focus WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+        return row["baby_id"] if row else None
+
+    def set_focus_baby(self, session_id: int, baby_id: int) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO session_baby_focus(session_id, baby_id) "
+                "VALUES(?, ?)",
+                (session_id, baby_id),
             )
             conn.commit()

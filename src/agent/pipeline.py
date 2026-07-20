@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from common.config import EnterpriseConfig
 from kb.store import KnowledgeStore, CorpusHit
@@ -48,7 +48,8 @@ class Agent:
 
     def _build_messages(self, query: str, context: str,
                         history: List[Dict[str, str]],
-                        constraints=None) -> List[Dict[str, str]]:
+                        constraints=None,
+                        baby_block: Optional[str] = None) -> List[Dict[str, str]]:
         system_parts = [
             f"{self.cfg.system_prompt}\n"
             "仅依据下方【企业知识库】内容回答，不得编造未提及的信息；"
@@ -60,6 +61,9 @@ class Agent:
             block = constraints.to_prompt_block()
             if block:
                 system_parts.append(block)
+        # MOD-baby-profile：当前焦点宝宝档案块注入（可选，空则不注入）
+        if baby_block:
+            system_parts.append(baby_block)
         system = "\n\n".join(system_parts)
         msgs: List[Dict[str, str]] = [{"role": "system", "content": system}]
         for h in history:
@@ -68,14 +72,14 @@ class Agent:
         return msgs
 
     async def answer(self, query: str, history: List[Dict[str, str]] = None,
-                    constraints=None) -> Answer:
+                    constraints=None, baby_block: Optional[str] = None) -> Answer:
         history = history or []
         # 1) 检索
         hits = self.store.retrieve(query, self.cfg.enterprise_id, top_k=5)
         # 2) 拼接上下文
         context = self._build_context(hits)
-        # 3) 企业 prompt（含可选用户约束块）
-        messages = self._build_messages(query, context, history, constraints)
+        # 3) 企业 prompt（含可选用户约束块 / 宝宝档案块）
+        messages = self._build_messages(query, context, history, constraints, baby_block)
         # 4) 调用 LLM
         reply = await self.provider.complete(messages, retrieved_hits=hits)
         # 5) 引用

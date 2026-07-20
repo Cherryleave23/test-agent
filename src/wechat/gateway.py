@@ -21,6 +21,8 @@ from session.constraints import (
     should_compress,
 )
 from agent.pipeline import Agent, Answer
+from baby.store import BabyProfileStore
+from baby.archive import resolve_and_archive
 from wechat.ilink_client import ILinkClient, IncomingMessage
 
 logger = logging.getLogger(__name__)
@@ -28,11 +30,13 @@ logger = logging.getLogger(__name__)
 
 class WechatGateway:
     def __init__(self, cfg: EnterpriseConfig, session: SessionStore,
-                 agent: Agent, client: ILinkClient):
+                 agent: Agent, client: ILinkClient,
+                 baby_store: BabyProfileStore | None = None):
         self.cfg = cfg
         self.session = session
         self.agent = agent
         self.client = client
+        self.baby_store = baby_store
         self._sync_buf: Optional[str] = None
 
     async def handle_message(self, msg: IncomingMessage,
@@ -64,7 +68,24 @@ class WechatGateway:
                 stored = stored.merge(extract_constraints(msg.content))
             self.session.save_constraints(sid, stored)
 
-            ans = await self.agent.answer(msg.content, history, constraints=stored)
+            # ---- MOD-baby-profile：每轮消歧 + 建档安全网 + 主动归档 + 设焦点 ----
+            baby_block = None
+            if self.cfg.baby_profile_enabled and self.baby_store is not None:
+                focus_before = self.session.get_focus_baby(sid)
+                arch = await resolve_and_archive(
+                    self.baby_store, self.agent.provider, ent, emp,
+                    early_text, msg.content, focus_before,
+                )
+                self.session.set_focus_baby(sid, arch.focus_baby_id)
+                if arch.baby is not None:
+                    cust = self.baby_store.get_customer(arch.baby.customer_id)
+                    baby_block = arch.baby.to_prompt_block(
+                        customer_name=cust.name if cust else ""
+                    )
+
+            ans = await self.agent.answer(
+                msg.content, history, constraints=stored, baby_block=baby_block
+            )
             self.session.append_turn(sid, "user", msg.content, msg.message_id)
             self.session.append_turn(sid, "assistant", ans.text)
             await self.client.send_message(emp, ans.text, context_token)

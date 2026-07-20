@@ -62,6 +62,8 @@ class EnterpriseConfig(BaseModel):
     rerank: RerankConfig = Field(default_factory=RerankConfig)
     wechat: WechatConfig = Field(default_factory=WechatConfig)
     db_path: str = "instance.db"
+    baby_profile_enabled: bool = True  # MOD-baby-profile：宝宝档案主动建档/归档/注入
+    baby_db_path: Optional[str] = None  # 宝宝档案库路径；为空则复用 db_path
     system_prompt: str = (
         "你是母婴垂类智能顾问，服务于门店员工，基于企业产品知识库回答育儿与产品问题。"
     )
