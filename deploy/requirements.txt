@@ -1,0 +1,11 @@
+# 端侧实例依赖（MVP 最小集）
+# Python 3.11
+fastapi
+uvicorn
+pydantic
+pyyaml
+chromadb
+httpx
+# 真实中文语义嵌入（端侧 CPU 可跑；如仅用 mock 嵌入可省略）
+# 同时其 CrossEncoder 直接用于加载开源重排器 BAAI/bge-reranker-v2-m3（独立重排阶段）
+sentence-transformers

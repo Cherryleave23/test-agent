@@ -1,0 +1,24 @@
+# 1 家企业 1 个实例（MOD-deploy，G6）
+# 实例含 iLink bot 凭证，运行期出网 HTTPS 到 ilinkai.weixin.qq.com
+services:
+  maternal-agent:
+    build: .
+    container_name: maternal-agent-${ENTERPRISE_ID:-demo}
+    restart: unless-stopped
+    environment:
+      - ENTERPRISE_ID=${ENTERPRISE_ID:-demo}
+    volumes:
+      - ./enterprise.yaml:/app/deploy/enterprise.yaml:ro
+      - agent-data:/app/data
+    # 出网白名单：仅放通到腾讯 iLink 官方域名（HTTPS 443）
+    networks:
+      - wechat_egress
+    # 禁止访问内网其他服务（端侧隔离）
+    read_only: false
+
+networks:
+  wechat_egress:
+    driver: bridge
+
+volumes:
+  agent-data:

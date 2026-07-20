@@ -1,0 +1,27 @@
+# 单企业实例配置（1 企业 1 实例，G6）
+# 复制本文件并按企业修改后，docker-compose 挂载为只读
+enterprise_id: demo
+enterprise_name: 示范母婴门店
+db_path: /app/data/instance.db
+system_prompt: |
+  你是母婴垂类智能顾问，服务于门店员工，基于企业产品知识库回答育儿与产品问题。
+  仅依据知识库内容作答，不编造；涉及婴幼儿健康须附免责声明。
+
+llm:
+  kind: mock            # mock | ollama | cloud
+  model: default
+  temperature: 0.2
+  max_tokens: 1024
+  # 云 API 示例（kind=cloud 时填）：
+  # base_url: https://api.openai.com/v1
+  # api_key: sk-xxx
+
+embedding:
+  kind: mock            # mock | bge-small-zh
+
+wechat:
+  bot_token: <从 iLink 开放平台获取的 bot token>
+  app_id: bot
+  base_url: https://ilinkai.weixin.qq.com
+  poll_timeout: 30
+  poll_interval: 1.0

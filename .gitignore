@@ -1,0 +1,16 @@
+# 生成物 / 本地状态
+__pycache__/
+*.pyc
+.codebuddy/
+
+# 持久化实例（可由 scripts/ingest_bend.py 重建；harness 用临时目录，不依赖此目录）
+data/
+
+# Python 虚拟环境
+venv/
+.venv/
+
+# 编辑器 / OS
+.vscode/
+.idea/
+.DS_Store
