@@ -12,10 +12,13 @@ Anthropic 端点需显式 ``cache_control`` 断点（见 :func:`_apply_cache_con
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 
 from common.config import LLMConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _apply_cache_control(messages: List[Dict], cfg: LLMConfig) -> List[Dict]:
@@ -47,6 +50,29 @@ def _apply_cache_control(messages: List[Dict], cfg: LLMConfig) -> List[Dict]:
         else:
             out.append(m)
     return out
+
+
+def _report_cache_hit(usage: dict) -> Optional[float]:
+    """解析 LLM 返回的 ``usage``，记录 Prompt Caching 命中情况（可观测性）。
+
+    DeepSeek / OpenAI 在 ``usage.prompt_tokens_details.cached_tokens`` 返回命中 token 数；
+    命中时记 info 日志并返回命中率（0-100），未命中或字段缺失返回 None。
+
+    返回命中率便于单测断言，同时不依赖具体 logging 配置。
+    """
+    if not isinstance(usage, dict):
+        return None
+    details = usage.get("prompt_tokens_details") or {}
+    cached = details.get("cached_tokens", 0) or 0
+    total_in = usage.get("prompt_tokens", 0) or 0
+    if cached > 0 and total_in > 0:
+        hit_rate = cached / total_in * 100
+        logger.info(
+            "LLM 缓存命中: %d/%d tokens (%.0f%%)",
+            cached, total_in, hit_rate,
+        )
+        return hit_rate
+    return None
 
 
 class LLMProvider(ABC):
@@ -144,7 +170,10 @@ class CloudProvider(LLMProvider):
                       "max_tokens": self.cfg.max_tokens},
             )
             r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"]
+            data = r.json()
+            # Prompt Caching 可观测性：解析 usage 记录缓存命中（DeepSeek/OpenAI 均返回）
+            _report_cache_hit(data.get("usage", {}) or {})
+            return data["choices"][0]["message"]["content"]
 
 
 class ProviderFactory:

@@ -7,7 +7,9 @@
   阶段2（消歧）：P4 快速切换意图消歧 / P5 代词指代
   阶段3（网关）：P2 混合式安全网(自动建档+第三方不建) / P3 主动归档跨轮累积
   阶段4（注入）：P6 焦点宝宝档案块注入 system prompt / P9 向后兼容
-  优化（Prompt Caching）：P17 稳定前缀置首且跨轮一致(缓存命中契约) + cache_control 断点
+  优化（Prompt Caching）：P17 稳定前缀命中契约 + cache_control 断点；P18 prompt 结构(byte-for-byte 可缓存)；
+  P19 序列化稳定 + 顺序即缓存键；P20 list_for_employee 排序稳定(ORDER BY)；P21 RAG prompt 顺序(稳定在前/动态在后)；
+  P23 缓存预热
 
 直接运行：python3 test_baby_profile.py  → 退出码 0 全过，非 0 有失败。
 """
@@ -27,6 +29,7 @@ from baby.resolution import resolve_and_extract  # noqa: E402
 from baby.archive import resolve_and_archive  # noqa: E402
 from agent.pipeline import Agent  # noqa: E402
 from agent.providers import _apply_cache_control  # noqa: E402
+from agent.warmup import warmup_prompt_cache  # noqa: E402
 from common.config import EnterpriseConfig  # noqa: E402
 from common.db import connect  # noqa: E402
 
@@ -587,6 +590,140 @@ async def _p17_prompt_caching():
     assert ratio > 0.5, f"缓存前缀应占 prompt 主体(>50%)，实际 {ratio:.2%}"
 
 
+# ---------------------------------------------------------------------------
+# P18 prompt 结构：system = 稳定指令 + 已知清单（byte-for-byte 可缓存）
+# P19 序列化稳定：同输入 known 两次 json.dumps 一致；顺序即缓存键（证明 ORDER BY 必要）
+# P20 SQL 排序稳定：list_for_employee 返回顺序跨调用一致（缓存命中前提）
+# ---------------------------------------------------------------------------
+async def _p18_prompt_structure():
+    from baby.resolution import _SYSTEM_INSTRUCTION, _KNOWN_HEADER
+
+    store = BabyProfileStore(_tmp_db())
+    cid1 = store.get_or_create_customer("ent1", "emp1", "张姐")
+    store.create_baby(BabyProfile(None, "ent1", "emp1", cid1, "壮壮", status="confirmed"))
+    cid2 = store.get_or_create_customer("ent1", "emp1", "李姐")
+    store.create_baby(BabyProfile(None, "ent1", "emp1", cid2, "妞妞", status="confirmed"))
+    known = store.list_for_employee("ent1", "emp1")
+
+    captured = {}
+
+    class Spy:
+        async def complete(self, messages, retrieved_hits=None, **kw):
+            captured["m"] = messages
+            return json.dumps({"action": "chat", "baby": "", "extracted": {},
+                               "is_third_party": False, "is_hypothetical": False},
+                              ensure_ascii=False)
+
+    await resolve_and_extract("user: 壮壮6个月", "壮壮喝1段", known, cid1, Spy())
+    sys_sent = captured["m"][0]["content"]
+    # P18：system 必须是「指令 + 清单头部 + known_json」的精确拼接（可精确重建 → 可缓存）
+    known_json = json.dumps(known, ensure_ascii=False)
+    assert sys_sent == _SYSTEM_INSTRUCTION + _KNOWN_HEADER + known_json, \
+        "system 必须是 稳定指令 + 已知清单 的精确拼接（缓存前缀 byte-for-byte 一致）"
+
+
+async def _p19_serialization_stable():
+    store = BabyProfileStore(_tmp_db())
+    c1 = store.get_or_create_customer("e", "m", "张姐")
+    store.create_baby(BabyProfile(None, "e", "m", c1, "壮壮", status="confirmed"))
+    c2 = store.get_or_create_customer("e", "m", "李姐")
+    store.create_baby(BabyProfile(None, "e", "m", c2, "妞妞", status="confirmed"))
+    known = store.list_for_employee("e", "m")
+
+    # P19：同输入两次 json.dumps 完全一致（缓存命中前提）
+    assert json.dumps(known, ensure_ascii=False) == json.dumps(known, ensure_ascii=False)
+    # 顺序即缓存键：打乱顺序会得到不同的 json（证明无 ORDER BY 会破坏缓存）
+    shuffled = list(reversed(known))
+    assert json.dumps(known, ensure_ascii=False) != json.dumps(shuffled, ensure_ascii=False), \
+        "顺序参与缓存键——这正是 list_for_employee 必须 ORDER BY 的原因"
+
+
+async def _p20_sql_order_stable():
+    store = BabyProfileStore(_tmp_db())
+    # 刻意以「乱序」插入，验证 ORDER BY 保证输出稳定
+    c_z = store.get_or_create_customer("e", "m", "张姐")
+    c_l = store.get_or_create_customer("e", "m", "李姐")
+    store.create_baby(BabyProfile(None, "e", "m", c_l, "妞妞", status="confirmed"))  # 先建李姐
+    store.create_baby(BabyProfile(None, "e", "m", c_z, "壮壮", status="confirmed"))  # 再建张姐
+
+    a = store.list_for_employee("e", "m")
+    # 连续两次调用顺序一致
+    b = store.list_for_employee("e", "m")
+    assert json.dumps(a, ensure_ascii=False) == json.dumps(b, ensure_ascii=False), \
+        "list_for_employee 返回顺序须跨调用稳定"
+    # 中途新增宝宝后，既有顺序仍稳定（按 customer_id, baby_id 排序）
+    c_z2 = store.get_or_create_customer("e", "m", "张姐")
+    store.create_baby(BabyProfile(None, "e", "m", c_z2, "小宝", status="confirmed"))
+    c = store.list_for_employee("e", "m")
+    # 张姐(customer_id=1) 的两个宝宝应排在 李姐(customer_id=2) 之前，组内按 baby_id 升序
+    names = [x["baby_name"] for x in c]
+    assert names.index("壮壮") < names.index("小宝") < names.index("妞妞"), \
+        f"应按 (customer_id, baby_id) 稳定排序，实际 {names}"
+
+
+# ---------------------------------------------------------------------------
+# P21 RAG prompt 顺序（优化 C·阶段2）：稳定企业 prompt 在前、动态检索 context 在后
+# ---------------------------------------------------------------------------
+def _p21_rag_prompt_order():
+    cfg = EnterpriseConfig(enterprise_id="ent1")
+    agent = Agent(cfg, _DummyStore())
+
+    # 无半稳定块：context 应位于 system 末尾（稳定前缀可被缓存）
+    msgs = agent._build_messages("推荐什么奶粉", "【知识库】xxx", [], None, None)
+    sys0 = msgs[0]["content"]
+    assert sys0.startswith(cfg.system_prompt), "稳定企业 prompt 必须置首"
+    assert sys0.endswith(f"【企业知识库】\n【知识库】xxx"), "动态检索 context 必须置于末尾"
+
+    # 有半稳定块（档案 + 约束）：context 须在它们之后（稳定+半稳定构成可缓存前缀）
+    baby = BabyProfile(None, "ent1", "emp1", 1, "壮壮",
+                       baby_age="6个月", allergens=["牛奶蛋白"], status="confirmed")
+    block = baby.to_prompt_block(customer_name="张姐")
+    from session.constraints import UserConstraints
+    cons = UserConstraints(baby_age="6个月")
+    msgs2 = agent._build_messages("推荐什么奶粉", "【知识库】yyy", [], cons, block)
+    sys2 = msgs2[0]["content"]
+    i_stable = sys2.index(cfg.system_prompt)
+    i_baby = sys2.index("【当前宝宝档案】")
+    i_cons = sys2.index("【用户已明确约束】")
+    # 稳定指令文本也含"【企业知识库】"，故取最后一个出现 = 动态检索块（置于末尾）
+    i_ctx = sys2.rindex("【企业知识库】")
+    assert i_stable < i_baby < i_cons < i_ctx, \
+        "顺序须为 稳定 < 档案块 < 约束块 < 动态context（前缀可缓存）"
+
+
+# ---------------------------------------------------------------------------
+# P23 缓存预热（优化 C·阶段4）：构造稳定前缀并触发一次 provider 调用
+# ---------------------------------------------------------------------------
+async def _p23_warmup():
+    from baby.resolution import _SYSTEM_INSTRUCTION, _KNOWN_HEADER
+
+    store = BabyProfileStore(_tmp_db())
+    cid = store.get_or_create_customer("e", "m", "张姐")
+    store.create_baby(BabyProfile(None, "e", "m", cid, "壮壮", status="confirmed"))
+    known = store.list_for_employee("e", "m")
+
+    captured = {}
+
+    class Spy:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, messages, retrieved_hits=None, **kw):
+            self.calls += 1
+            captured["m"] = messages
+            captured["kw"] = kw
+            return "{}"
+
+    spy = Spy()
+    await warmup_prompt_cache(store, spy, "e", "m")
+    assert spy.calls == 1, "预热应触发一次 provider 调用"
+    sent = captured["m"]
+    assert sent[0]["role"] == "system"
+    assert sent[0]["content"] == _SYSTEM_INSTRUCTION + _KNOWN_HEADER + json.dumps(known, ensure_ascii=False), \
+        "预热须发送与消歧一致的稳定前缀（写入同一缓存）"
+    assert captured["kw"].get("cache_control") is True, "预热应开启 cache_control"
+
+
 CHECKS = [
     ("P1 显式建档(客户+宝宝)", _p1_explicit_create),
     ("P7 (ent,emp) 隔离", _p7_isolation),
@@ -605,6 +742,11 @@ CHECKS = [
     ("P15 跨会话写锁并发upsert", _p15_concurrent_write_lock),
     ("P16 焦点稳定结果缓存(跳LLM+切换仍检)", _p16_focus_stable_cache),
     ("P17 Prompt Caching(稳定前缀命中契约+cache_control断点)", _p17_prompt_caching),
+    ("P18 消歧prompt结构(system=指令+known,byte-for-byte可缓存)", _p18_prompt_structure),
+    ("P19 序列化稳定(同known两次json一致+顺序即缓存键)", _p19_serialization_stable),
+    ("P20 list_for_employee 排序稳定(ORDER BY)", _p20_sql_order_stable),
+    ("P21 RAG prompt顺序(稳定在前/动态context在后)", _p21_rag_prompt_order),
+    ("P23 缓存预热(构造稳定前缀+触发调用)", _p23_warmup),
 ]
 
 

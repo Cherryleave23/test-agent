@@ -16,6 +16,7 @@ controlled-vibe-coding：真实运行判 PASS/FAIL，不自我宣称。
 """
 import asyncio
 import json
+import logging
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from common.config import LLMConfig, EnterpriseConfig  # noqa: E402
-from agent.providers import OllamaProvider, CloudProvider  # noqa: E402
+from agent.providers import OllamaProvider, CloudProvider, _report_cache_hit  # noqa: E402
 from agent.pipeline import Agent  # noqa: E402  (仅用其 _build_messages 验证 grounding 透传)
 
 
@@ -142,10 +143,63 @@ async def _p3_grounding_reaches_provider():
         srv.shutdown()
 
 
+async def _p22_cache_hit_monitor():
+    # 单元：_report_cache_hit 解析 cached_tokens 并返回命中率
+    assert _report_cache_hit({"prompt_tokens": 1000,
+                              "prompt_tokens_details": {"cached_tokens": 700}}) == 70.0
+    assert _report_cache_hit({"prompt_tokens": 100}) is None, "无缓存命中应返回 None"
+    assert _report_cache_hit({}) is None
+
+    # 集成：CloudProvider 真实响应含 usage → 解析且不 crash，并记录缓存命中日志
+    cap: list = []
+    h = logging.Handler()
+    h.emit = lambda rec: cap.append(rec.getMessage())
+    plog = logging.getLogger("agent.providers")
+    prev_level = plog.level
+    plog.setLevel(logging.INFO)  # 默认 WARNING 会挡掉 info 日志
+    plog.addHandler(h)
+    srv = None
+    try:
+        class _UsageHandler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0) or 0)
+                if n:
+                    self.rfile.read(n)
+                resp = {
+                    "choices": [{"message": {"role": "assistant", "content": "Cloud 回复"}}],
+                    "usage": {"prompt_tokens": 1000,
+                              "prompt_tokens_details": {"cached_tokens": 700}},
+                }
+                data = json.dumps(resp).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _UsageHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+        cfg = LLMConfig(kind="cloud", model="m", api_key="sk",
+                        base_url=f"http://127.0.0.1:{port}")
+        out = await CloudProvider(cfg).complete([{"role": "user", "content": "hi"}])
+        assert out == "Cloud 回复", f"cloud 解析应正常，实际 {out!r}"
+        assert any("缓存命中" in m for m in cap), f"应记录缓存命中日志，实际 {cap}"
+    finally:
+        plog.removeHandler(h)
+        plog.setLevel(prev_level)
+        if srv:
+            srv.shutdown()
+
+
 CHECKS = [
     ("P1 ollama 真实路径", _p1_ollama_real_path),
     ("P2 cloud 真实路径", _p2_cloud_real_path),
     ("P3 grounding 透传", _p3_grounding_reaches_provider),
+    ("P22 Prompt Caching 命中监控(usage解析+日志)", _p22_cache_hit_monitor),
 ]
 
 

@@ -257,7 +257,8 @@ class BabyProfileStore:
                           b.allergens_json, b.budget, b.category, b.status,
                           c.customer_id, c.name AS customer_name
                    FROM babies b JOIN customers c ON b.customer_id=c.customer_id
-                   WHERE b.enterprise_id=? AND b.employee_id=?""",
+                   WHERE b.enterprise_id=? AND b.employee_id=?
+                   ORDER BY c.customer_id, b.baby_id""",  # P0：稳定排序，保证 known_json 序列化一致（Prompt Caching 命中前提）
                 (ent, emp),
             ).fetchall()
         for r in rows:

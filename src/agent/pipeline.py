@@ -50,22 +50,31 @@ class Agent:
                         history: List[Dict[str, str]],
                         constraints=None,
                         baby_block: Optional[str] = None) -> List[Dict[str, str]]:
-        system_parts = [
+        # Prompt Caching（优化 C·阶段2）：稳定内容在前，动态内容在后，使前缀命中缓存。
+        # 稳定层：企业 system prompt + 指令（跨所有查询不变，必命中）
+        stable_text = (
             f"{self.cfg.system_prompt}\n"
             "仅依据下方【企业知识库】内容回答，不得编造未提及的信息；"
-            "如知识库无相关内容，明确告知用户暂无信息。",
-            f"【企业知识库】\n{context}",
-        ]
+            "如知识库无相关内容，明确告知用户暂无信息。"
+        )
+        # 半稳定层：宝宝档案块 + 约束块（会话内大部分时间不变，会话内命中）
+        semi_stable_parts: List[str] = []
+        if baby_block:
+            semi_stable_parts.append(baby_block)
         # P1 约束块注入（方向 B 累积 + 方向 A 压缩的产物）：可选，空则不注入
         if constraints is not None:
             block = constraints.to_prompt_block()
             if block:
-                system_parts.append(block)
-        # MOD-baby-profile：当前焦点宝宝档案块注入（可选，空则不注入）
-        if baby_block:
-            system_parts.append(baby_block)
-        system = "\n\n".join(system_parts)
-        msgs: List[Dict[str, str]] = [{"role": "system", "content": system}]
+                semi_stable_parts.append(block)
+        # 动态层：检索上下文（每轮变化，不进缓存前缀）
+        dynamic_text = f"【企业知识库】\n{context}"
+
+        system_content = stable_text
+        if semi_stable_parts:
+            system_content += "\n\n" + "\n\n".join(semi_stable_parts)
+        system_content += "\n\n" + dynamic_text
+
+        msgs: List[Dict[str, str]] = [{"role": "system", "content": system_content}]
         for h in history:
             msgs.append({"role": h["role"], "content": h["content"]})
         msgs.append({"role": "user", "content": query})
