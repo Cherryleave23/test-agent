@@ -60,7 +60,7 @@
 | `src/agent/pipeline.py` | 改（增） | `_build_messages` 接受 `baby_block` 注入 `【当前宝宝档案】`（向后兼容） |
 | `harness/test_baby_profile.py` | 新 | `@module baby`：P1/P7/P8(存储) + P4/P5(消歧) + P2/P3(建档安全网/归档) + P6/P9(注入/兼容) |
 
-> 状态：**done（P2）**。默认全量门禁 9/9 ALL GREEN（含本模块 `test_baby_profile.py` 9/9）。
+> 状态：**done（P2 + 优化 B/C）**。默认全量门禁 9/9 ALL GREEN（含本模块 `test_baby_profile.py` 17/17）。
 > `02-index.md` 中 MOD-baby-profile 由 `backlog` 升级为 `partial`。
 
 ### P2 harness 验收表（`harness/test_baby_profile.py`，`@module baby`）
@@ -82,6 +82,7 @@
 | P14 | 网关级连续失败熔断：≥阈值降级为仅产品问答，不再建档/归档 | `gateway` + `session_resolution_fails` | PASS |
 | P15 | 跨会话写锁：并发 upsert 同一宝宝不丢失更新 | `store._baby_locks` | PASS |
 | P16 | 焦点稳定结果缓存：跳过 LLM 消歧（规则归档）+ 提及他宝仍触发切换 | `resolution.focus_is_stable` + `archive` 缓存路径 | PASS |
+| P17 | **Prompt Caching**：稳定前缀（指令+known）置首且跨轮一致（缓存命中契约）+ `cache_control` 断点（Anthropic 显式 / OpenAI 自动） | `resolution` 前缀分离 + `providers._apply_cache_control` | PASS |
 
 > 零破坏论证：`baby_block` 为可选形参、默认 `None`；网关仅在 `baby_profile_enabled` 且 `baby_store` 非 None 时接线；
 > `MockProvider` 忽略 system prompt → 注入档案块不改 Mock 回答；既有 8 套测试不受影响（默认门禁 9/9 绿）。
@@ -123,7 +124,9 @@ BabyProfile( baby_id PK, enterprise_id, employee_id, customer_id FK,
 resolve_and_extract(history_text, current_msg, known, focus_baby_id, provider)
    │
    ├─ 短路：当前消息无宝宝信号 且 未提到已知宝宝/客户名 → 沿用焦点 + 规则抽取（不调 LLM）
-   └─ 否则 一次 LLM 调用（system 含 known 清单 + focus + 指令）→ JSON
+   └─ 否则 一次 LLM 调用（Prompt Caching：稳定前缀置首 + cache_control=True）→ JSON
+        ├─ 稳定前缀（messages[0].system，缓存对象）：指令 + known 清单（同员工跨轮一致）
+        ├─ 每轮变量（messages[1].user，断点之后）：focus + history + current_msg
         ├─ action: chat|new_baby|new_customer|confirm|merge|delete
         ├─ customer / baby: 客户名 / 宝宝名（用于定位或新建）
         ├─ extracted: 宝宝属性对象（仅明确提到的）
@@ -135,6 +138,7 @@ resolve_and_extract(history_text, current_msg, known, focus_baby_id, provider)
 - **快速切换**：每轮独立消歧，严格依据「当前这句 + 上下文」判定当前在聊谁；提到已知宝宝名即走 LLM（不短路）。
 - **代词指代**：`baby` 为空且 action 为 chat/confirm/merge/delete → 用本会话焦点宝宝兜底。
 - **短路启发式**：固定关键词（奶粉/过敏/段位/客户/姐…）+ 已知宝宝名/客户名。提到已知名字必须消歧，不能短路。
+- **Prompt Caching（优化 C）**：消歧 system prompt 在同员工会话中高度稳定（仅新增宝宝时变化），故把**稳定前缀**（指令 `_SYSTEM_INSTRUCTION` + 已知清单 `known`）作为首条 system 消息、开启 `cache_control`，使 provider 复用前缀、显著降低 input token 费用（50-90%）。`focus`/历史/当前句置于缓存断点之后——**切换焦点宝宝不破坏缓存**（焦点在变量区）。OpenAI 兼容端点靠自动前缀缓存（前缀已置首即生效，无需改写请求体）；Anthropic 端点由 `_apply_cache_control` 把 system 内容包成 content-block 并加 `cache_control: {type:"ephemeral"}` 显式断点。
 
 ---
 
@@ -158,6 +162,7 @@ resolve_and_archive(store, provider, ent, emp, history_text, current_msg, focus_
 - **安全网（混合式 + 待确认）**：自动建档一律 `pending`，由员工后续确认/修正/合并/删除；第三人称/假设绝不落库。
 - **主动归档**：抽取到的明确属性每轮 upsert 进正确宝宝，跨多轮保留并累加（如「6个月」→ 再「对牛奶过敏」→ 两者皆留）。
 - **结果缓存（优化 B）**：`focus_is_stable` 判定焦点稳定（消息仅提焦点宝宝、无第三方提及、未提其他已知宝宝名）→ **跳过 LLM 实体链接**，仅用规则抽取把属性归档到焦点宝宝。LLM 仅做实体链接，属性抽取本就是规则，故质量无损却省一次 LLM 调用；提及任一「非焦点」已知宝宝名仍走 LLM 以检测快速切换。
+- **Prompt Caching（优化 C）**：缓存未命中仍需发完整 prompt，但消歧 system prompt 在同员工会话中高度稳定，故把「指令 + known 清单」稳定前缀置首并标 `cache_control`，provider 复用前缀使 input token 费用降 50-90%；`focus` 等每轮变量置于断点之后，切换焦点不破坏缓存。与优化 B 互补：B 跳过调用、C 降低每次调用的 token 成本。
 
 ---
 
@@ -181,6 +186,7 @@ resolve_and_archive(store, provider, ent, emp, history_text, current_msg, focus_
 | 跨会话并发写竞态 | `BabyProfileStore._baby_locks` 按 baby_id 串行化 upsert/merge/delete（仿 SessionStore 锁注册表） |
 | 过期待确认累积 | `prune_stale_pending(days)` 清理陈旧 pending，confirmed 永不动 |
 | 短路由成本 | 无信号短路，跳过 LLM 调用 |
+| LLM input token 费用高（消歧每轮都发完整 prompt） | **Prompt Caching（优化 C）**：稳定前缀置首 + `cache_control`，provider 复用前缀降 50-90% input 费用；切换焦点不破坏缓存 |
 
 ---
 
