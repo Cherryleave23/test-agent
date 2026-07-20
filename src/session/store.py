@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
 from common.db import connect
+from session.constraints import UserConstraints
 
 
 @dataclass
@@ -50,6 +51,10 @@ class SessionStore:
                     message_id TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
+                CREATE TABLE IF NOT EXISTS constraints (
+                    session_id INTEGER PRIMARY KEY,
+                    json TEXT
+                );
                 """
             )
             conn.commit()
@@ -115,4 +120,22 @@ class SessionStore:
     def reset(self, session_id: int) -> None:
         with connect(self.db_path) as conn:
             conn.execute("DELETE FROM turns WHERE session_id=?", (session_id,))
+            conn.commit()
+
+    # ---------- 用户约束持久化（P1：方向 B 累积 + 方向 A 压缩，跨轮可续）----------
+    def get_constraints(self, session_id: int) -> Optional[UserConstraints]:
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT json FROM constraints WHERE session_id=?", (session_id,)
+            ).fetchone()
+        if row is None or not row["json"]:
+            return None
+        return UserConstraints.from_json(row["json"])
+
+    def save_constraints(self, session_id: int, constraints: UserConstraints) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO constraints(session_id, json) VALUES(?, ?)",
+                (session_id, constraints.to_json()),
+            )
             conn.commit()

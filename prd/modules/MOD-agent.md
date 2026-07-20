@@ -31,6 +31,9 @@ session_ctx(user_msg, history, enterprise_id)
 - **配置驱动**：每企业 `conf.yaml` 的 `prompt` 段（角色、产品类目、禁答范围、语气）。
 - 检索片段注入时标注来源，并强约束「**仅依据所提供的资料作答，资料未覆盖则说不知道**」。
 - 系统提示优先级高于用户/检索内容，防注入（见八）。
+- **用户已明确约束块**（MOD-session P1 扩展）：`_build_messages` 在 system 末尾追加 `【用户已明确约束】`
+  （月龄/段位/过敏原/预算/品牌/品类，来自 `UserConstraints`），让逐轮约束显式每轮校验；该块为可选参数，
+  不传则行为与历史一致（向后兼容，`MockProvider` 忽略 system 内容故不影响既有闭环）。
 
 ---
 
@@ -99,6 +102,7 @@ session_ctx(user_msg, history, enterprise_id)
   - **P1 ollama 真实路径**：请求 `/api/chat` 体含 `model`/`messages`/`temperature` 且 `stream:false`（修复默认流式 NDJSON 致 `r.json()` 崩溃），正确解析 `message.content`。
   - **P2 cloud 真实路径**：请求带 `Bearer` 鉴权头，体含 `model`/`messages`/`temperature`/`max_tokens`，正确解析 `choices[0].message.content`。
   - **P3 grounding 透传**：pipeline 注入的【企业知识库】上下文确实进入真实 provider 收到的 messages（无截断）。
+- **约束块注入**（`UserConstraints` → `【用户已明确约束】`）验收归属 **`@module session`** 的 `test_session_constraints.py`（见 MOD-session §〇）：B3 断言该块进入 `_build_messages` 生成的 system 消息。
 
 ---
 

@@ -4,9 +4,9 @@
 
 controlled-vibe-coding：真实运行判 PASS/FAIL，不自我宣称。
 
-场景：把用户提供的 6 个奶粉商品 markdown 作为某家 B 端产品（ent_b）入库，
-使用 bge 真实语义嵌入，验证：
-  R1 入库：6 个商品全部写入 products_milk + Chroma 向量。
+场景：把用户提供的奶粉商品 markdown（含商品 frontmatter 的文件）作为某家 B 端产品
+（ent_b）入库，使用 bge 真实语义嵌入，验证：
+  R1 入库：5 个商品全部写入 products_milk + Chroma 向量（非商品文档自动跳过）。
   R2 语义检索：过敏/早产/山羊奶粉/全营养/1段牛奶粉 等查询命中正确商品（top-1）。
   R3 真实嵌入：向量为 512 维归一化，且语义序正确（过敏查询下恩敏舒 > 金领冠）。
   R4 防幻觉：跨域查询（汽车轮胎）不召回任何产品。
@@ -16,6 +16,7 @@ controlled-vibe-coding：真实运行判 PASS/FAIL，不自我宣称。
 """
 import asyncio
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -37,7 +38,13 @@ def _build_store(ent_id: str, embedding: str) -> KnowledgeStore:
 
 
 def _seed_bend(store: KnowledgeStore, ent_id: str) -> int:
-    files = sorted(str(p) for p in UPLOADS.glob("*.md"))
+    # 仅入库含商品 frontmatter（brand/series/stage/reg_number）的奶粉商品 markdown；
+    # 跳过非商品文档（如本会话上传的「对标分析」md），避免被误当商品解析入库。
+    files = []
+    for p in sorted(UPLOADS.glob("*.md")):
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        if re.search(r"^---\s*\n.*?(brand|series|stage|reg_number)\s*:", text, re.DOTALL):
+            files.append(str(p))
     assert files, f"未找到上传商品 markdown：{UPLOADS}"
     ids = ingest_markdown_products(store, files, ent_id)
     return len(ids)

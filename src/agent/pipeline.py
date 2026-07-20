@@ -47,27 +47,35 @@ class Agent:
         return "\n\n".join(lines)
 
     def _build_messages(self, query: str, context: str,
-                        history: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        system = (
+                        history: List[Dict[str, str]],
+                        constraints=None) -> List[Dict[str, str]]:
+        system_parts = [
             f"{self.cfg.system_prompt}\n"
             "仅依据下方【企业知识库】内容回答，不得编造未提及的信息；"
-            "如知识库无相关内容，明确告知用户暂无信息。\n\n"
-            f"【企业知识库】\n{context}"
-        )
+            "如知识库无相关内容，明确告知用户暂无信息。",
+            f"【企业知识库】\n{context}",
+        ]
+        # P1 约束块注入（方向 B 累积 + 方向 A 压缩的产物）：可选，空则不注入
+        if constraints is not None:
+            block = constraints.to_prompt_block()
+            if block:
+                system_parts.append(block)
+        system = "\n\n".join(system_parts)
         msgs: List[Dict[str, str]] = [{"role": "system", "content": system}]
         for h in history:
             msgs.append({"role": h["role"], "content": h["content"]})
         msgs.append({"role": "user", "content": query})
         return msgs
 
-    async def answer(self, query: str, history: List[Dict[str, str]] = None) -> Answer:
+    async def answer(self, query: str, history: List[Dict[str, str]] = None,
+                    constraints=None) -> Answer:
         history = history or []
         # 1) 检索
         hits = self.store.retrieve(query, self.cfg.enterprise_id, top_k=5)
         # 2) 拼接上下文
         context = self._build_context(hits)
-        # 3) 企业 prompt
-        messages = self._build_messages(query, context, history)
+        # 3) 企业 prompt（含可选用户约束块）
+        messages = self._build_messages(query, context, history, constraints)
         # 4) 调用 LLM
         reply = await self.provider.complete(messages, retrieved_hits=hits)
         # 5) 引用

@@ -14,6 +14,12 @@ from typing import Optional
 
 from common.config import EnterpriseConfig
 from session.store import SessionStore
+from session.constraints import (
+    UserConstraints,
+    extract_constraints,
+    summarize_to_constraints,
+    should_compress,
+)
 from agent.pipeline import Agent, Answer
 from wechat.ilink_client import ILinkClient, IncomingMessage
 
@@ -44,7 +50,21 @@ class WechatGateway:
                 {"role": t.role, "content": t.content}
                 for t in self.session.history(sid)
             ]
-            ans = await self.agent.answer(msg.content, history)
+            # ---- P1 用户约束：方向 B 逐轮抽取累积 + 方向 A 超阈 LLM 压缩 ----
+            stored = self.session.get_constraints(sid) or UserConstraints()
+            early_text = "\n".join(f"{h['role']}: {h['content']}" for h in history)
+            if should_compress(len(history)):
+                # 方向 A：把早期对话（含本轮）压成结构化约束，限制有效信息量（非轮数）
+                compressed = await summarize_to_constraints(
+                    early_text + f"\nuser: {msg.content}", self.agent.provider
+                )
+                stored = compressed
+            else:
+                # 方向 B：规则抽取本轮约束并累积进既有状态（确定性、无 LLM）
+                stored = stored.merge(extract_constraints(msg.content))
+            self.session.save_constraints(sid, stored)
+
+            ans = await self.agent.answer(msg.content, history, constraints=stored)
             self.session.append_turn(sid, "user", msg.content, msg.message_id)
             self.session.append_turn(sid, "assistant", ans.text)
             await self.client.send_message(emp, ans.text, context_token)

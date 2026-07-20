@@ -12,6 +12,57 @@
 
 ---
 
+## 〇、本次实施 P1（扩展：规划·条件抽取累积 + 记忆·短期摘要压缩）
+
+> 分类：**P4 扩展**。依据对标分析（`test-agent-planning-memory-gap-analysis.md`）选定的两项高 ROI 改进，
+> 收敛为同一产物「**结构化用户约束 `UserConstraints`**」。非目标（仅存档参考）：Prompt CoT / 员工级长期记忆 /
+> 多步检索管线 / 工具调用层 / 记忆检索复用 / 矛盾检测。
+
+### 意图（must-have）
+1. **`UserConstraints` 数据模型 + 约束 schema**：复用 `MilkProduct` 字段词表
+   （`stage` / `age_range`→`baby_age` / `price`→`budget` / `brand` / `ptype`→`category`），
+   含注入 prompt 块与 JSON 持久化。
+2. **方向 B 逐轮抽取累积（规划）**：规则化 `extract_constraints(text)`（月龄/段位/过敏原/预算/品类）
+   + `merge` 累积；**无 LLM 依赖、确定性**。
+3. **方向 A LLM 摘要压缩（记忆）**：`summarize_to_constraints(history, provider)` 会话超 N 轮触发，
+   把早期对话压成结构化约束（**限制有效信息量，非轮数**）；JSON 解析失败兜底退化为规则抽取。
+4. **持久化**：`SessionStore` 增 `constraints` 表（session_id PK → JSON）+ `get/save_constraints`；跨轮累积、可续。
+5. **注入**：`Agent._build_messages` 接受 `constraints`，注入 `【用户已明确约束】` 块；
+   `wechat/gateway` 接线（每轮抽取累积 + 超阈压缩 + 注入）。
+6. 每行为配 harness（CVC 只增不删）。
+
+### 非目标（non-goals，本次不做）
+- 不实现 Prompt CoT / 员工级长期记忆 / 多步检索管线 / 工具调用层 / 记忆检索复用 / 矛盾检测（对标文档其余方向，仅作参考存档）。
+- 不引入 Hermes Ralph Loop / Kanban / Checkpoints、OpenClaw Obsidian Vault（过度工程，文档已否）。
+- 不破坏既有绿测试：`MockProvider` 忽略 system prompt → 注入块不改变 Mock 回答；超阈压缩在短对话不触发。
+
+### 文件与 harness 落点
+| 文件 | 动作 | 说明 |
+|------|------|------|
+| `src/session/constraints.py` | 新 | `UserConstraints` + `extract_constraints`(B) + `summarize_to_constraints`(A) + `merge`/JSON |
+| `src/session/store.py` | 改（增） | 增 `constraints` 表 + `get/save_constraints` |
+| `src/agent/pipeline.py` | 改（增） | `_build_messages` 接受 `constraints` 并注入 `【用户已明确约束】` 块（向后兼容） |
+| `src/wechat/gateway.py` | 改（增） | 每轮抽取累积(B) + 超 N 轮 LLM 压缩(A) + 注入答案 |
+| `harness/test_session_constraints.py` | 新 | `@module session`：B1 抽取 / B2 累积 / B3 注入 / A1 压缩 / A2 触发阈 / 持久化 / 向后兼容 |
+
+> 状态：**done（P1）**。全量门禁 8/8 ALL GREEN（含本模块 `test_session_constraints.py`）。`02-index.md` 中 MOD-session 由 `backlog` 升级为 `partial`。
+
+### P1 harness 验收表（`harness/test_session_constraints.py`，`@module session`）
+| 编号 | 验收点 | 对应实现 | 结果 |
+|------|--------|----------|------|
+| B1 | 规则抽取 `extract_constraints`：单句正确抽月龄/段位/预算/过敏原/品类 | `constraints.py` | PASS |
+| B2 | 累积合并 `merge`：旧值保留、新值刷新、列表去重保序、budget 非 None 优先 | `constraints.py` | PASS |
+| B3 | 约束块注入 + 向后兼容：非空注入 `【用户已明确约束】`；None/空不注入且与老调用一致 | `pipeline.py._build_messages` | PASS |
+| B4 | 约束持久化 round-trip：`SessionStore.get/save_constraints` 往返一致；无约束返 None | `store.py` | PASS |
+| A1 | LLM 压缩 `summarize_to_constraints`：JSON 解析；失败兜底退化为规则抽取 | `constraints.py` | PASS |
+| A2 | 触发阈 `should_compress`：低于阈 False、超/等阈 True | `constraints.py` | PASS |
+| A3 | 网关级触发：短对话(<10轮)不调 LLM 压缩；长对话(≥10轮)恰好调一次压缩（SpyProvider 观测） | `gateway.py` + `constraints.py` | PASS |
+| B5 | 网关级方向 B：逐轮抽取累积并持久化（跨轮可续） | `gateway.py` + `store.py` | PASS |
+
+> 零破坏论证：`MockProvider` 忽略 system prompt → 注入约束块不改 Mock 回答；方向 A 压缩仅在 `history>=10` 触发，既有 e2e 短对话不触发 → 既有 7 套测试不受影响。
+
+---
+
 ## 一、会话模型（自研，借鉴 Hermes）
 
 ### 1.1 会话键
