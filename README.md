@@ -47,6 +47,7 @@
 | `25055ea` | **P2 数据一致性加固** | pending 防污染(`find_baby_by_name`仅 confirmed + `_match_known`同名歧义不误配) / 消歧失败熔断(`parse_failed`+会话级≥3轮降级告警) / 跨会话写锁(`_baby_locks`) / `prune_stale_pending` | harness P10–P15 全绿 |
 | `4d154ef` | **P2 消歧结果缓存** | `focus_is_stable`：焦点稳定时跳过 LLM 实体链接、规则抽取归档到焦点；提及他宝仍触发切换检测 | harness P16 全绿 |
 | `46a8737` | **P2 消歧 Prompt Caching（优化 C）** | 稳定前缀（指令+known 清单）置首 + `cache_control` 断点：OpenAI 兼容端点自动前缀缓存、Anthropic 显式 ephemeral 断点；切换焦点不破坏缓存，input token 降 50-90% | harness P17 全绿 |
+| `1216b85` | **Prompt Caching 全阶段落地** | P0 `list_for_employee` ORDER BY（序列化稳定）；阶段2 pipeline RAG prompt 稳定在前/动态 context 在后；阶段3 `_report_cache_hit` 命中日志；阶段4 `warmup_prompt_cache` 预热 | baby P18–P20/P23 + agent P21/P22 全绿 |
 | `a63d2aa` | **门禁提速治理** | 重型真实模型测试（`test_real_embed_bend`/`test_reranker` 的 RR3/RR4）改用 `RUN_REAL_MODEL=1` 显式开关隔离，默认门禁跳过 → 9/9 绿且 ~50s | 默认门禁 9/9 ALL GREEN，重型测试 opt-in 仍 7/7、4/4 绿 |
 
 > **全量门禁：9/9 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
@@ -57,9 +58,9 @@
 |------|------|------|
 | MOD-knowledge-ingest | **partial（P1 已落地）** | 统一接口 + 真实爬虫 + 归一管线已交付；PDF/OCR 适配器 deferred（non-goal） |
 | MOD-kb | partial | 分块/嵌入/向量检索 + 独立重排器已跑通真实嵌入 |
-| MOD-agent | partial | RAG 核心 + 每企业可配置 LLM + 约束块注入已落地 |
+| MOD-agent | partial | RAG 核心 + 每企业可配置 LLM + 约束块注入 + **Prompt Caching（RAG prompt 顺序 + 命中监控 + 预热）** 已落地 |
 | MOD-session | **partial（P1 已落地）** | 三级隔离 + 用户约束累积/压缩已交付 |
-| MOD-baby-profile | **partial（P2 已落地 + 数据一致性加固 + 优化 B/C）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 / 焦点稳定结果缓存 / Prompt Caching 稳定前缀 |
+| MOD-baby-profile | **partial（P2 已落地 + 数据一致性加固 + 优化 B/C + Prompt Caching 全阶段）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 / 焦点稳定结果缓存 / Prompt Caching 稳定前缀 + ORDER BY + 预热 |
 | MOD-wechat | partial | iLink Bot API 网关 + 约束/档案接线已落地 |
 | MOD-deploy | backlog | 端侧 1 家 1 实例部署（待实现） |
 

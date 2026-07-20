@@ -102,6 +102,9 @@ session_ctx(user_msg, history, enterprise_id)
   - **P1 ollama 真实路径**：请求 `/api/chat` 体含 `model`/`messages`/`temperature` 且 `stream:false`（修复默认流式 NDJSON 致 `r.json()` 崩溃），正确解析 `message.content`。
   - **P2 cloud 真实路径**：请求带 `Bearer` 鉴权头，体含 `model`/`messages`/`temperature`/`max_tokens`，正确解析 `choices[0].message.content`。
   - **P3 grounding 透传**：pipeline 注入的【企业知识库】上下文确实进入真实 provider 收到的 messages（无截断）。
+  - **P21 RAG prompt 顺序（Prompt Caching·阶段2）**：`_build_messages` 把稳定企业 prompt 置首、半稳定（宝宝档案块+约束块）居中、动态检索 context 置尾，使前缀可命中缓存。
+  - **P22 Prompt Caching 命中监控**：`CloudProvider.complete` 解析 `usage.prompt_tokens_details.cached_tokens` 并记录 `LLM 缓存命中: X/Y tokens (Z%)`（DeepSeek/OpenAI 均返回）。
+- `src/agent/warmup.py`（**已落地**）：`warmup_prompt_cache(store, provider, ent, emp)` 构造消歧稳定前缀并触发一次调用，把前缀写入 provider 缓存，消除新会话首条请求的 cache-miss（阶段4，可选）。
 - **约束块注入**（`UserConstraints` → `【用户已明确约束】`）验收归属 **`@module session`** 的 `test_session_constraints.py`（见 MOD-session §〇）：B3 断言该块进入 `_build_messages` 生成的 system 消息。
 
 ---

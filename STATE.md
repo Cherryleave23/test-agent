@@ -1,7 +1,7 @@
 # STATE.md — 工程状态快照
 
 > 自动生成的项目状态快照，供会话交接 / 上下文压缩使用。
-> 生成时间：2026-07-21 — Head `a81f8f4` — 全量门禁 **9/9 ALL GREEN**（~50s）
+> 生成时间：2026-07-21 — Head `1216b85` — 全量门禁 **9/9 ALL GREEN**（~50s）
 
 ## 1. 项目定位（不可变约束）
 
@@ -35,7 +35,7 @@ harness/       # 各模块回归脚本
 
 | 模块 | 状态 | 关键 commit | 门禁 |
 |---|---|---|---|
-| MOD-baby-profile | **完成（P1–P17 全绿）** | `a63d2aa`/`25055ea`/`4d154ef`/`46a8737` | 17/17 |
+| MOD-baby-profile | **完成（P1–P23 全绿）** | `a63d2aa`/`25055ea`/`4d154ef`/`46a8737`/`1216b85` | 22/22 (+agent P21/P22) |
 | MOD-ingest（P1） | 完成 | `3f5f106` | 8/8 |
 | MOD-session 记忆 | 收敛为 UserConstraints | `64fe970` | — |
 | MOD-kb 嵌入缓存 | 未启动（review 建议 D） | — | — |
@@ -65,14 +65,13 @@ RUN_REAL_MODEL=1 python3.11 scripts/run_harness.py
 ```
 
 - **WAL 已开启**：`PRAGMA journal_mode=WAL`，非裸写。
-- **缓存**：消歧已实施 **Prompt Caching（优化 C）**——`resolve_and_extract` 把稳定前缀（指令+known 清单）置首并开 `cache_control`；OpenAI 兼容端点靠自动前缀缓存，Anthropic 由 `_apply_cache_control` 显式加 ephemeral 断点；切换焦点不破坏缓存（焦点在断点后）。与优化 B（焦点稳定跳过 LLM）互补。
+- **缓存**：**Prompt Caching 全阶段已落地**（方案 2026-07-21，`1216b85`）：① P0 `list_for_employee` 加 `ORDER BY` 保证 `known_json` 序列化稳定（缓存命中前提）；② 消歧 `resolve_and_extract` 稳定前缀（指令+known）置首 + `cache_control`，切换焦点不破坏缓存；③ 阶段2 `pipeline._build_messages` RAG prompt 稳定企业 prompt 在前、动态检索 context 置尾；④ 阶段3 `providers._report_cache_hit` 解析 `usage.prompt_tokens_details.cached_tokens` 记命中日志；⑤ 阶段4 `agent.warmup.warmup_prompt_cache` 预热。OpenAI 兼容端点靠自动前缀缓存，Anthropic 由 `_apply_cache_control` 显式加 ephemeral 断点。与优化 B（焦点稳定跳过 LLM）互补。
 
 ## 6. 待办与决策记录
 
 | 项 | 结论 |
 |---|---|
-| 消歧 Prompt Caching（优化 C） | **已实施**（`46a8737`，P17 绿）：稳定前缀置首 + cache_control 断点 |
-| MOD-agent RAG 答案系统 prompt 缓存 | 比消歧缓存 ROI 高，建议优先（未启动） |
+| 消歧/全链路 Prompt Caching（优化 C + 全阶段） | **已实施**（`46a8737` 消歧前缀 + `1216b85` 全阶段：ORDER BY / RAG顺序 / 命中监控 / 预热） |
 | MOD-kb 嵌入缓存 | 中等收益，独立模块（未启动） |
 | MOD-deploy 三项 P0 | 上线前必做，超出 baby 范围（未启动） |
 

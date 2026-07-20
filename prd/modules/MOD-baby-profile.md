@@ -60,7 +60,7 @@
 | `src/agent/pipeline.py` | 改（增） | `_build_messages` 接受 `baby_block` 注入 `【当前宝宝档案】`（向后兼容） |
 | `harness/test_baby_profile.py` | 新 | `@module baby`：P1/P7/P8(存储) + P4/P5(消歧) + P2/P3(建档安全网/归档) + P6/P9(注入/兼容) |
 
-> 状态：**done（P2 + 优化 B/C）**。默认全量门禁 9/9 ALL GREEN（含本模块 `test_baby_profile.py` 17/17）。
+> 状态：**done（P2 + 优化 B/C + Prompt Caching 全阶段）**。默认全量门禁 9/9 ALL GREEN（含本模块 `test_baby_profile.py` 22/22）。
 > `02-index.md` 中 MOD-baby-profile 由 `backlog` 升级为 `partial`。
 
 ### P2 harness 验收表（`harness/test_baby_profile.py`，`@module baby`）
@@ -83,6 +83,10 @@
 | P15 | 跨会话写锁：并发 upsert 同一宝宝不丢失更新 | `store._baby_locks` | PASS |
 | P16 | 焦点稳定结果缓存：跳过 LLM 消歧（规则归档）+ 提及他宝仍触发切换 | `resolution.focus_is_stable` + `archive` 缓存路径 | PASS |
 | P17 | **Prompt Caching**：稳定前缀（指令+known）置首且跨轮一致（缓存命中契约）+ `cache_control` 断点（Anthropic 显式 / OpenAI 自动） | `resolution` 前缀分离 + `providers._apply_cache_control` | PASS |
+| P18 | 消歧 prompt 结构：system = 稳定指令 + 已知清单（byte-for-byte 可缓存，可精确重建） | `resolution.resolve_and_extract` | PASS |
+| P19 | 序列化稳定：同 `known` 两次 `json.dumps` 一致；顺序即缓存键（证明 `list_for_employee` 须 ORDER BY） | `store.list_for_employee` + `json.dumps` | PASS |
+| P20 | `list_for_employee` 排序稳定：**SQL 加 `ORDER BY c.customer_id, b.baby_id`**（P0，缓存命中前提） | `store.list_for_employee` | PASS |
+| P23 | 缓存预热：构造与消歧一致的稳定前缀并触发一次 provider 调用（`cache_control=True`） | `agent.warmup.warmup_prompt_cache` | PASS |
 
 > 零破坏论证：`baby_block` 为可选形参、默认 `None`；网关仅在 `baby_profile_enabled` 且 `baby_store` 非 None 时接线；
 > `MockProvider` 忽略 system prompt → 注入档案块不改 Mock 回答；既有 8 套测试不受影响（默认门禁 9/9 绿）。
@@ -138,7 +142,10 @@ resolve_and_extract(history_text, current_msg, known, focus_baby_id, provider)
 - **快速切换**：每轮独立消歧，严格依据「当前这句 + 上下文」判定当前在聊谁；提到已知宝宝名即走 LLM（不短路）。
 - **代词指代**：`baby` 为空且 action 为 chat/confirm/merge/delete → 用本会话焦点宝宝兜底。
 - **短路启发式**：固定关键词（奶粉/过敏/段位/客户/姐…）+ 已知宝宝名/客户名。提到已知名字必须消歧，不能短路。
-- **Prompt Caching（优化 C）**：消歧 system prompt 在同员工会话中高度稳定（仅新增宝宝时变化），故把**稳定前缀**（指令 `_SYSTEM_INSTRUCTION` + 已知清单 `known`）作为首条 system 消息、开启 `cache_control`，使 provider 复用前缀、显著降低 input token 费用（50-90%）。`focus`/历史/当前句置于缓存断点之后——**切换焦点宝宝不破坏缓存**（焦点在变量区）。OpenAI 兼容端点靠自动前缀缓存（前缀已置首即生效，无需改写请求体）；Anthropic 端点由 `_apply_cache_control` 把 system 内容包成 content-block 并加 `cache_control: {type:"ephemeral"}` 显式断点。
+- **Prompt Caching（优化 C，全阶段已落地）**：消歧 system prompt 在同员工会话中高度稳定（仅新增宝宝时变化），故把**稳定前缀**（指令 `_SYSTEM_INSTRUCTION` + 已知清单 `known`）作为首条 system 消息、开启 `cache_control`，使 provider 复用前缀、显著降低 input token 费用（DeepSeek 99% off / OpenAI 50% / Anthropic 90%）。`focus`/历史/当前句置于缓存断点之后——**切换焦点宝宝不破坏缓存**（焦点在变量区）。OpenAI 兼容端点靠自动前缀缓存（前缀已置首即生效，无需改写请求体）；Anthropic 端点由 `_apply_cache_control` 把 system 内容包成 content-block 并加 `cache_control: {type:"ephemeral"}` 显式断点。
+  - **P0 前置（缓存命中前提）**：`list_for_employee` SQL 加 `ORDER BY c.customer_id, b.baby_id`，保证 `known_json` 序列化 byte-for-byte 稳定（P19/P20 守护）；否则顺序抖动会破坏前缀缓存。
+  - **阶段4 预热（可选）**：`agent.warmup.warmup_prompt_cache` 构造与消歧一致的稳定前缀并触发一次调用，把前缀写入 provider 缓存，消除新会话首条请求的 cache-miss（仅当该员工预期 ≥2 次请求时值得）。
+  - **可观测性（阶段3）**：`providers._report_cache_hit` 解析 `usage.prompt_tokens_details.cached_tokens` 并记录 `LLM 缓存命中: X/Y tokens (Z%)`，验证缓存实际命中。
 
 ---
 
