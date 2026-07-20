@@ -1,29 +1,39 @@
 """知识采集统一接口（MOD-knowledge-ingest，G1/C3）。
 
 统一协议：不同来源（PDF/图片表格/爬虫/Excel）归一为 KnowledgeRecord 再入库。
-MVP 实现 SeedAdapter（灌示例数据）与 TextAdapter；PDF/OCR/爬虫适配器保留接口。
+- `KnowledgeRecord`：归一后的统一结构；`structured` 持有结构化产品对象（奶粉/营养品），
+  `product_category` 打企业产品结构标签（供 kb 过滤/溯源）。
+- `IngestAdapter`（= `UnifiedKnowledgeSource` 别名）：每个采集源实现 `fetch() -> List[KnowledgeRecord]`。
+- `SeedAdapter` / `TextAdapter`：既有真实适配器（onboarding 灌数据 / 纯文本）。
+- 真实适配器（WebCrawler / MarkdownProduct / PDF / OCR）：见 `ingest/adapters.py`。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Protocol, runtime_checkable
+from dataclasses import dataclass, field
+from typing import Any, List, Optional, Protocol, runtime_checkable
 
 from kb.store import KnowledgeStore
 
 
 @dataclass
 class KnowledgeRecord:
-    source_type: str          # pdf | image_table | web | excel | seed
+    source_type: str                      # web | text | hq | milk | nutrition | pdf | image_table
     title: str
     content: str
-    metadata: dict = None
+    metadata: dict = field(default_factory=dict)
     lang: str = "zh"
+    product_category: str = ""            # 企业产品结构挂钩标签（奶粉/营养品/...），供 kb 过滤
+    structured: Optional[Any] = None      # 结构化产品对象（MilkProduct/NutritionProduct），非文本源时承载
 
 
 @runtime_checkable
 class UnifiedKnowledgeSource(Protocol):
     def fetch(self) -> List[KnowledgeRecord]:
         ...
+
+
+# 规范命名（PRD MOD-knowledge-ingest §二 用 IngestAdapter）
+IngestAdapter = UnifiedKnowledgeSource
 
 
 class SeedAdapter:
@@ -63,26 +73,6 @@ class TextAdapter:
         return [KnowledgeRecord(source_type="text", title=self.title or self.path, content=text)]
 
 
-# PDF / 图片表格 / 爬虫 适配器：MVP 保留接口契约，后续按 C3 接入 crawl4ai + PaddleOCR/MinerU
-class PDFAdapter:
-    def __init__(self, path: str):
-        self.path = path
+# 真实适配器（WebCrawler / MarkdownProduct / PDF / OCR）统一在 ingest/adapters.py 实现。
+# PDF / 图片表格 适配器：仍按计划（crawl4ai + MinerU / PaddleOCR）接入，本 P1 不实现（见 PRD non-goals）。
 
-    def fetch(self) -> List[KnowledgeRecord]:
-        raise NotImplementedError("PDF 解析适配器：MVP 未接入（计划 crawl4ai + MinerU）")
-
-
-class ImageTableAdapter:
-    def __init__(self, path: str):
-        self.path = path
-
-    def fetch(self) -> List[KnowledgeRecord]:
-        raise NotImplementedError("图片/表格 OCR 适配器：MVP 未接入（计划 PaddleOCR）")
-
-
-class WebCrawlerAdapter:
-    def __init__(self, url: str):
-        self.url = url
-
-    def fetch(self) -> List[KnowledgeRecord]:
-        raise NotImplementedError("官网爬虫适配器：MVP 未接入（计划 crawl4ai）")

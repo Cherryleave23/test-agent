@@ -5,7 +5,7 @@
 
 | 模块 ID | 职责（一句话） | 详解文件 | Harness 标签 | 状态 |
 |---------|----------------|----------|--------------|------|
-| MOD-knowledge-ingest | 爬虫/OCR/多源统一适配接口，知识入库 | `modules/MOD-knowledge-ingest.md` | ingest | backlog |
+| MOD-knowledge-ingest | 爬虫/OCR/多源统一适配接口，知识入库 | `modules/MOD-knowledge-ingest.md` | ingest | partial（P1：统一接口+注册表+真实爬虫+管线，OCR/PDF 待续） |
 | MOD-kb | 企业定制知识库：分块/嵌入/向量检索 | `modules/MOD-kb.md` | kb | backlog |
 | MOD-agent | RAG 问答核心：检索增强+企业定制 prompt+可切换 LLM | `modules/MOD-agent.md` | agent | backlog |
 | MOD-session | 多员工会话隔离：(企业×员工×会话) 三级隔离 | `modules/MOD-session.md` | session | backlog |

@@ -124,6 +124,17 @@ class KnowledgeStore:
                 )
                 """
             )
+            # 采集去重表：跨运行内容哈希去重（相同 source_type+内容不重复入库）
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ingest_dedup (
+                    enterprise_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    chash TEXT NOT NULL,
+                    PRIMARY KEY (enterprise_id, source_type, chash)
+                )
+                """
+            )
             conn.commit()
 
     # ---------- 写：HQ 知识库 ----------
@@ -136,6 +147,35 @@ class KnowledgeStore:
             )
             conn.commit()
             return cid
+
+    # ---------- 写：企业自有 RAG 知识（采集归一后的文本源：web/text/pdf/...）----------
+    def add_knowledge(self, enterprise_id: str, title: str, content: str,
+                     meta: Optional[dict] = None) -> int:
+        with connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cid = self._add_corpus(
+                cur, "b_kb", enterprise_id, None, title, content,
+                meta or {},
+            )
+            conn.commit()
+            return cid
+
+    # ---------- 采集去重（跨运行内容哈希）----------
+    def is_ingested(self, enterprise_id: str, source_type: str, chash: str) -> bool:
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM ingest_dedup WHERE enterprise_id=? AND source_type=? AND chash=?",
+                (enterprise_id, source_type, chash),
+            ).fetchone()
+            return row is not None
+
+    def mark_ingested(self, enterprise_id: str, source_type: str, chash: str) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO ingest_dedup(enterprise_id, source_type, chash) VALUES(?,?,?)",
+                (enterprise_id, source_type, chash),
+            )
+            conn.commit()
 
     @staticmethod
     def fts_text(title: str, content: str) -> str:

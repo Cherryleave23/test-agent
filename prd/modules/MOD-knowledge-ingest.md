@@ -14,6 +14,35 @@
 
 ---
 
+## 〇、本次实施 P1（扩展 MOD-knowledge-ingest，意图先行）
+
+> 分类：**P4 扩展**（非新模块、非纯 bugfix、非纯重构）。在既有模块上落地「统一多源适配接口」的第一块地基 + 第一个真实非结构化适配器。
+> 依据 CVC：先写意图/非目标，再写代码；每行为配 harness；PRD 与 harness 为单一事实源。
+
+### 意图（must-have）
+1. **统一接口 + 注册表**：定义 `IngestAdapter` 协议（`fetch() -> List[KnowledgeRecord]`），所有来源归一为同一 `KnowledgeRecord` 结构；`IngestPipeline` 提供 `register`/`run`，开闭原则（新增来源不动核心）。
+2. **把现有 markdown 商品适配器纳为「统一接口」的一种实现**：新增 `MarkdownProductAdapter` 包装既有 `parse_md_product`，产出 `source_type="milk"` 的 `KnowledgeRecord`（`structured` 持有 `MilkProduct`）。`parse_md_product`/`ingest_markdown_products` **保留不动**（向后兼容，只增不删）。
+3. **第一个真实非结构化适配器：`WebCrawlerAdapter`**：用标准库 `urllib` + `html.parser`（零外部依赖，端侧友好）真实抓取并解析 HTML，产出 `source_type="web"` 的内容分块。沙箱内**以本地 stub HTTP 服务驱动真实客户端代码路径**（沿用 MOD-wechat §五 既定做法），不下真实外网。
+4. **`IngestPipeline` 路由 + 去重 + 容错**：按 `source_type` 路由到对应 sink（`milk`→`store.add_milk`；`nutrition`→`store.add_nutrition`；`web`/`text`/`hq`→`store.add_knowledge`/`add_hq_knowledge`）；**跨运行内容哈希去重**（新增 `ingest_dedup` 表）；**单适配器失败不中断整批、失败留痕**（不静默丢弃，不谎称成功）。
+
+### 非目标（non-goals，本次不做）
+- **不做 OCR / PDFAdapter 真实实现**（仍 `NotImplementedError`，留待后续；符合「采集是搬运非生成」与端侧轻量约束）。
+- **不碰已绿的检索/生产闭环**（MOD-kb / MOD-agent / MOD-wechat 既有 harness 不变）；本 P1 仅以只读方式桥接既有 `store.retrieve` 做集成断言。
+- **不引入 LLM 改写采集内容**（母婴事实性内容禁止生成式改写，见 §六 风险）。
+
+### 文件与 harness 落点
+| 文件 | 动作 | 说明 |
+|------|------|------|
+| `src/ingest/protocol.py` | 改 | `KnowledgeRecord` 增 `structured`/`product_category`；移除 3 个 `NotImplementedError` 占位类，指向 `adapters.py` |
+| `src/ingest/adapters.py` | 新 | `MarkdownProductAdapter`（包装既有 `parse_md_product`）+ 真实 `WebCrawlerAdapter` + `IngestPipeline` + `REGISTRY` |
+| `src/ingest/markdown_product.py` | 不变 | `parse_md_product` / `ingest_markdown_products` 保留（向后兼容，只增不删） |
+| `src/kb/store.py` | 改（增） | 新增 `add_knowledge` + `ingest_dedup` 表 + `is_ingested`/`mark_ingested` |
+| `harness/test_ingest.py` | 新 | `@module ingest`：I1 爬虫 / I2 markdown / I3 归一 / I4 去重 / I5 容错 / I6 集成 |
+
+> 状态：**in-progress（P1）**。`02-index.md` 中 MOD-knowledge-ingest 由 `backlog` 升级为 `partial`。
+
+---
+
 ## 一、采集适配器（三类来源，C3）
 | 适配器 | 工具 | 输入 | 产出 |
 |--------|------|------|------|
@@ -70,15 +99,18 @@
 
 ---
 
-## 七、harness 验收草案（真实运行，非自述）
-> 用本地样例（mock 网页/样例 PDF/样例图）驱动，断言各适配器与归一/容错。每个用例一个 `@ingest` 脚本。
+## 七、harness 验收（真实运行，非自述）
+> 用本地样例（**本地 stub HTTP 服务**驱动真实爬虫客户端代码 / 样例 markdown 商品）断言各适配器与归一/容错。统一落在 `harness/test_ingest.py`（`@module ingest`）。
 
-- `test_ingest_crawler.py`：网页源产出非空 `KnowledgeRecord`。
-- `test_ingest_pdf.py`：PDF（含扫描件）经解析/OCR 产出文本记录。
-- `test_ingest_ocr.py`：图片/表格经 OCR 产出结构化文本记录。
-- `test_ingest_unified.py`：多源归一为同一 `KnowledgeRecord` 结构。
-- `test_ingest_resilient.py`：单条失败不中断整批，失败留痕可补采。
-- `test_ingest_dedup.py`：同 URL/同内容哈希不重复入库。
+| 编号 | 断言 | 对应 PRD 草案 | 状态 |
+|------|------|---------------|------|
+| I1 | `WebCrawlerAdapter` 打本地 stub 服务产出非空 `source_type=web` `KnowledgeRecord` | `test_ingest_crawler` | ✅ P1 落地 |
+| I2 | `MarkdownProductAdapter` 产出 `source_type=milk` 且 `structured` 持有 `MilkProduct` | （markdown 适配器） | ✅ P1 落地 |
+| I3 | 多源（web/markdown）归一为同一 `KnowledgeRecord` 结构 | `test_ingest_unified` | ✅ P1 落地 |
+| I4 | `IngestPipeline` 跨运行内容哈希去重：同页二次入库计数为 0 | `test_ingest_dedup` | ✅ P1 落地（持久化 `ingest_dedup` 表） |
+| I5 | 单适配器抛错不中断整批、失败留痕、兄弟适配器仍入库 | `test_ingest_resilient` | ✅ P1 落地 |
+| I6 | 集成：markdown 走管线入真实 store，产品落 `products_milk` 且可被 `retrieve` 命中 | （桥接 MOD-kb） | ✅ P1 落地 |
+| — | PDF / OCR 适配器（crawl4ai / MinerU / PaddleOCR） | `test_ingest_pdf` / `test_ingest_ocr` | ⏸ deferred（非 P1 目标，仍 `NotImplementedError`） |
 
 ---
 
