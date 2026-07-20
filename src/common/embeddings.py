@@ -113,17 +113,38 @@ def mock_embed(text: str, dim: int = DIM) -> List[float]:
 
 
 class _BgeEmbedder:
-    """bge-small-zh-v1.5 惰性单例封装（避免无谓加载大模型）。"""
+    """bge-small-zh-v1.5 惰性单例封装（避免无谓加载大模型）。
+
+    可插拔设计：模型路径优先从插件管理器解析（本地插件目录），
+    无则回退到 HuggingFace repo id（sentence-transformers 自动下载）。
+    """
 
     _model = None
     _name = "BAAI/bge-small-zh-v1.5"
+
+    @classmethod
+    def _resolve_model_name(cls) -> str:
+        """通过插件管理器解析模型路径，实现可插拔。
+
+        优先级：已安装的本地插件路径 > HuggingFace repo id
+        """
+        try:
+            from common.plugins import PluginManager
+            pm = PluginManager()
+            resolved = pm.resolve_model("bge-small-zh-v1.5")
+            if resolved:
+                return resolved
+        except Exception:
+            pass
+        return cls._name
 
     @classmethod
     def _get(cls):
         if cls._model is None:
             from sentence_transformers import SentenceTransformer  # 惰性：仅真实嵌入路径才导入
 
-            cls._model = SentenceTransformer(cls._name)
+            model_name_or_path = cls._resolve_model_name()
+            cls._model = SentenceTransformer(model_name_or_path)
         return cls._model
 
     @classmethod

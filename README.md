@@ -15,7 +15,7 @@
   - [`prd/00-charter.md`](prd/00-charter.md) — 意图 / 目标 / 非目标 / 范围边界 / **已确认决策 / 待确认**
   - [`prd/01-architecture.md`](prd/01-architecture.md) — 技术栈 / 目录 / 依赖图 / 关键决策
   - [`prd/02-index.md`](prd/02-index.md) — 模块索引（开发地图）
-  - [`prd/modules/`](prd/modules/) — 6 个模块详解
+  - [`prd/modules/`](prd/modules/) — 7 个模块详解
 - **验收必须真实运行**：见 [`harness/`](harness/)，每条可验证行为都有可执行脚本，
   `RESULT: PASS/FAIL`，绝不以「我觉得能行」替代。
 
@@ -29,9 +29,9 @@
 | MOD-session | 多员工会话隔离：`(企业×员工×会话)` 三级隔离（员工=from_user_id，借鉴 Hermes 会话键思路自研） |
 | MOD-baby-profile | 宝宝/客户档案层：快速切换消歧 + 混合式建档安全网 + 主动归档 + 焦点宝宝档案注入 |
 | MOD-wechat | **个人微信（自建 iLink Bot API 网关，方案 B）** 接入：消息收发 / 按 from_user_id 身份识别 / 去重 |
-| MOD-deploy | 端侧 1 家 1 实例部署：Docker / 配置驱动 / 隔离（含 iLink bot 凭证） |
+| MOD-deploy | 端侧 1 家 1 实例部署：Docker / Windows 直装 / 配置驱动 / 依赖分层 / 隔离 |
 
-> 当前状态：PRD 治理骨架 + 6 模块**可实现规格**（含 harness 验收草案）已就位；**已进入实现阶段**，
+> 当前状态：PRD 治理骨架 + 7 模块**可实现规格**（含 harness 验收草案）已就位；**已进入实现阶段**，
 > 首批 P 级任务（知识转化层、会话约束层）已交付并通过全量门禁（见下「实现进展」）。仍按 CVC 纪律：意图先行、每行为配 harness、改必全量回归。
 
 ## 实现进展
@@ -48,9 +48,10 @@
 | `4d154ef` | **P2 消歧结果缓存** | `focus_is_stable`：焦点稳定时跳过 LLM 实体链接、规则抽取归档到焦点；提及他宝仍触发切换检测 | harness P16 全绿 |
 | `46a8737` | **P2 消歧 Prompt Caching（优化 C）** | 稳定前缀（指令+known 清单）置首 + `cache_control` 断点：OpenAI 兼容端点自动前缀缓存、Anthropic 显式 ephemeral 断点；切换焦点不破坏缓存，input token 降 50-90% | harness P17 全绿 |
 | `1216b85` | **Prompt Caching 全阶段落地** | P0 `list_for_employee` ORDER BY（序列化稳定）；阶段2 pipeline RAG prompt 稳定在前/动态 context 在后；阶段3 `_report_cache_hit` 命中日志；阶段4 `warmup_prompt_cache` 预热 | baby P18–P20/P23 + agent P21/P22 全绿 |
-| `a63d2aa` | **门禁提速治理** | 重型真实模型测试（`test_real_embed_bend`/`test_reranker` 的 RR3/RR4）改用 `RUN_REAL_MODEL=1` 显式开关隔离，默认门禁跳过 → 9/9 绿且 ~50s | 默认门禁 9/9 ALL GREEN，重型测试 opt-in 仍 7/7、4/4 绿 |
+| `a63d2aa` | **门禁提速治理** | 重型真实模型测试（`test_real_embed_bend`/`test_reranker` 的 RR3/RR4）改用 `RUN_REAL_MODEL=1` 显式开关隔离，默认门禁跳过 → 9/9 绿且 ~50s | 默认门禁 9/9 ALL GREEN，重型测试 opt-in 仍 7/7、4/4 均绿 |
+| `feat(deploy)` | **P1 端侧部署 Windows 直装 + 依赖分层** | 三层依赖（Tier1 URL拉取/Tier2 捆绑/Tier3 可插拔）+ `dependency-manifest.yaml` 声明式清单 + `configure.ps1` 交互式配置向导 + `from_yaml_with_env()` 环境变量覆盖 + `PluginManager` 可插拔模型路径 + requirements 双轨拆分 | deploy 18 断言全绿 |
 
-> **全量门禁：9/9 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
+> **全量门禁：11/11 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
 > 设 `RUN_REAL_MODEL=1` 并加 `--timeout 600` 可显式运行（bge 语义嵌入弯曲 7/7、真实重排 4/4 均绿）。
 
 ### 模块实现状态
@@ -62,13 +63,62 @@
 | MOD-session | **partial（P1 已落地）** | 三级隔离 + 用户约束累积/压缩已交付 |
 | MOD-baby-profile | **partial（P2 已落地 + 数据一致性加固 + 优化 B/C + Prompt Caching 全阶段）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 / 焦点稳定结果缓存 / Prompt Caching 稳定前缀 + ORDER BY + 预热 |
 | MOD-wechat | partial | iLink Bot API 网关 + 约束/档案接线已落地 |
-| MOD-deploy | backlog | 端侧 1 家 1 实例部署（待实现） |
+| MOD-deploy | **partial（P1 已落地）** | **Windows 直装 + 三层依赖分层（Tier1 URL拉取/Tier2 捆绑/Tier3 可插拔）+ `configure.ps1` 配置向导 + 环境变量覆盖 + `PluginManager` 可插拔模型路径** 已落地 |
+
+## 端侧部署
+
+### Windows 直装部署（低配门店推荐）
+
+门店电脑无需预装 Python，通过交互式配置向导完成部署：
+
+```powershell
+# 1. 运行配置向导（选择模式、拉取依赖、生成 .env.local）
+.\deploy\postinstall\configure.ps1
+
+# 2. 启动服务
+.\deploy\postinstall\run-agent.ps1
+
+# 3. 注册开机自启（可选）
+.\deploy\postinstall\register-service.ps1
+```
+
+**三种部署模式（端侧部署人员决定）：**
+
+| 模式 | LLM | 嵌入 | RAM | 适用场景 |
+|------|-----|------|-----|----------|
+| demo | mock（内置） | mock（内置） | ~200MB | 产品演示、功能验证 |
+| light | 云端（DeepSeek/OpenAI） | mock（内置） | ~300MB | 4-8GB 内存的门店电脑 |
+| full | 本地 Ollama 或 云端 | bge-small-zh（本地真实语义） | ~2GB | 8GB+ 内存的门店电脑 |
+
+**依赖三层分层策略：**
+
+- **Tier 1 — 稳定大文件（按 URL 拉取）**：torch CPU (~800MB)、sentence-transformers、bge 模型权重 (~100MB)。
+  迭代缓慢（半年一更）、体积大。不在安装包中捆绑，由 `configure.ps1` 按 `deploy/dependency-manifest.yaml`
+  声明的 URL 在配置阶段拉取。支持：PyPI 镜像选择、HuggingFace 国内镜像（hf-mirror.com）、离线 U 盘导入。
+- **Tier 2 — 小依赖（捆绑在安装包）**：pydantic、pyyaml、chromadb、httpx（共 ~60MB）。
+- **Tier 3 — 易变代码（可插拔）**：`src/` 应用源码、`enterprise.yaml` 配置。升级时只需替换 `app/` 目录。
+
+**可插拔模型路径：** `PluginManager`（`src/common/plugins.py`）管理模型插件的生命周期。
+`embeddings.py` 和 `rerank.py` 通过插件管理器解析模型路径——优先本地插件目录，无则回退 HuggingFace 下载。
+模型可插拔替换，不动业务代码。
+
+**环境变量覆盖：** `EnterpriseConfig.from_yaml_with_env()` 加载 yaml 后用环境变量覆盖。
+端侧不改 yaml 文件即可切换 LLM/embedding 模式。支持的环境变量见 `src/common/config.py` 文档。
+
+### Docker 部署（服务器/高配门店）
+
+```bash
+docker-compose -f deploy/docker-compose.yml up -d
+```
+
+详见 [`deploy/Dockerfile`](deploy/Dockerfile) 和 [`deploy/docker-compose.yml`](deploy/docker-compose.yml)。
 
 ## 运行验收
 
 ```bash
-python3 scripts/run_harness.py --all        # 全量回归（CI 门禁，~50s，9/9 绿）
+python3 scripts/run_harness.py --all        # 全量回归（CI 门禁，~50s，11/11 绿）
 python3 scripts/run_harness.py --module kb  # 仅某模块
+python3 scripts/run_harness.py --module deploy  # 端侧部署验收
 ```
 
 任一失败即退出非 0。新增行为必加测试；修 bug 必加回归。
@@ -89,6 +139,7 @@ python3 scripts/run_harness.py --module kb  # 仅某模块
 3. **知识来源 = PDF/说明书 + 图片表格 + 爬虫**（均为非结构化，无 API）。
 4. **首版 = 先定意图与方案，再进入编码**：意图与方案已细化完毕，现已进入 P 级实现（CVC 纪律：意图先行、每行为配 harness）。
 5. **网关 / agent 核心 = 方案 B：仅借鉴 iLink 契约自建轻量网关**（不耦合 Hermes 运行时，Hermes `weixin.py` 仅作参考实现）。
+6. **端侧部署 = Python 直装优先**：门店电脑配置有限，采用 Python embeddable + 离线 wheels + 三层依赖分层策略；Docker 作为服务器/高配门店的可选方案。
 
 ## 决策状态（见 charter O1–O3′）
 

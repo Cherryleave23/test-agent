@@ -11,7 +11,7 @@
 | MOD-session | 多员工会话隔离：(企业×员工×会话) 三级隔离 | `modules/MOD-session.md` | session | partial（P1：用户约束抽取累积 B + 短期摘要压缩 A，注入 prompt） |
 | MOD-wechat | 个人微信(iLink Bot API)接入：消息收发/身份识别/去重 | `modules/MOD-wechat.md` | wechat | partial（iLink 网关+约束接线已落地） |
 | MOD-baby-profile | 宝宝/客户档案层：快速切换消歧+主动建档/归档+焦点注入 | `modules/MOD-baby-profile.md` | baby | partial（P2：存储+每轮消歧+混合式建档安全网+主动归档+焦点注入） |
-| MOD-deploy | 端侧 1家1实例部署：Docker/配置驱动/隔离 | `modules/MOD-deploy.md` | deploy | backlog |
+| MOD-deploy | 端侧 1家1实例部署：Docker/配置驱动/隔离 | `modules/MOD-deploy.md` | deploy | partial（P1：Windows 直装+依赖分层+URL拉取+可插拔配置+环境变量覆盖已落地） |
 
 ## 加载纪律
 

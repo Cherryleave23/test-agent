@@ -15,8 +15,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 
 async def main(config_path: str):
-    cfg = EnterpriseConfig.from_yaml(config_path)
+    cfg = EnterpriseConfig.from_yaml_with_env(config_path)
     logging.info("启动企业实例: %s (%s)", cfg.enterprise_id, cfg.enterprise_name)
+    logging.info("LLM 模式: %s | Embedding 模式: %s | DB: %s",
+                 cfg.llm.kind, cfg.embedding.kind, cfg.db_path)
     store, session, agent, client, gateway = build_instance(cfg)
     # 首次运行灌入演示数据（可改为从 HQ 商品库 onboarding）
     if cfg.llm.kind == "mock":

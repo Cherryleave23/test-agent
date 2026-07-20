@@ -75,3 +75,60 @@ class EnterpriseConfig(BaseModel):
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return cls(**data)
+
+    @classmethod
+    def from_yaml_with_env(cls, path: str | Path) -> "EnterpriseConfig":
+        """加载 yaml 后用环境变量覆盖（端侧不改文件即可切换模式）。
+
+        环境变量优先级高于 yaml。支持的环境变量（前缀 AGENT_）：
+          AGENT_ENTERPRISE_ID     → enterprise_id
+          AGENT_DB_PATH           → db_path
+          AGENT_LLM_KIND          → llm.kind (mock|ollama|cloud)
+          AGENT_LLM_MODEL         → llm.model
+          AGENT_LLM_BASE_URL      → llm.base_url
+          AGENT_LLM_API_KEY       → llm.api_key
+          AGENT_LLM_TEMPERATURE   → llm.temperature (float)
+          AGENT_LLM_MAX_TOKENS    → llm.max_tokens (int)
+          AGENT_EMBEDDING_KIND    → embedding.kind (mock|bge-small-zh)
+          AGENT_BOT_TOKEN         → wechat.bot_token
+
+        用法（Windows）：
+          set AGENT_LLM_KIND=cloud
+          set AGENT_LLM_API_KEY=sk-xxx
+          python src/main.py deploy/enterprise.yaml
+        """
+        import os
+
+        cfg = cls.from_yaml(path)
+
+        env = os.environ.get
+
+        # 企业级
+        if v := env("AGENT_ENTERPRISE_ID"):
+            cfg.enterprise_id = v
+        if v := env("AGENT_DB_PATH"):
+            cfg.db_path = v
+
+        # LLM
+        if v := env("AGENT_LLM_KIND"):
+            cfg.llm.kind = v
+        if v := env("AGENT_LLM_MODEL"):
+            cfg.llm.model = v
+        if v := env("AGENT_LLM_BASE_URL"):
+            cfg.llm.base_url = v
+        if v := env("AGENT_LLM_API_KEY"):
+            cfg.llm.api_key = v
+        if v := env("AGENT_LLM_TEMPERATURE"):
+            cfg.llm.temperature = float(v)
+        if v := env("AGENT_LLM_MAX_TOKENS"):
+            cfg.llm.max_tokens = int(v)
+
+        # Embedding
+        if v := env("AGENT_EMBEDDING_KIND"):
+            cfg.embedding.kind = v
+
+        # WeChat
+        if v := env("AGENT_BOT_TOKEN"):
+            cfg.wechat.bot_token = v
+
+        return cfg

@@ -4,12 +4,11 @@
 把母婴商品知识库导出的 markdown（含脏数据）解析为 MilkProduct，写入指定企业的
 Chroma+SQLite 实例，并可选用真实嵌入（bge-small-zh-v1.5）。
 
-用法：
-  python3 scripts/ingest_bend.py \
-      --src /root/uploads \
-      --enterprise ent_b \
-      --db /workspace/data/ent_b.db \
-      --embedding bge
+用法（跨平台）：
+  # Windows
+  python scripts/ingest_bend.py --src %USERPROFILE%\\uploads --enterprise ent_b --db data\\ent_b.db --embedding bge
+  # Linux / macOS
+  python3 scripts/ingest_bend.py --src ~/uploads --enterprise ent_b --db data/ent_b.db --embedding bge
 
 --src 可为目录（递归 *.md）或若干文件。
 """

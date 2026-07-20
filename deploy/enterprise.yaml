@@ -1,8 +1,17 @@
 # 单企业实例配置（1 企业 1 实例，G6）
 # 复制本文件并按企业修改后，docker-compose 挂载为只读
+#
+# 端侧 Windows 直装：运行 configure.ps1 生成 .env.local 后，
+# 环境变量自动覆盖以下值（无需手动编辑本文件）。
+#
+# 模式选择（端侧部署人员决定）：
+#   轻量模式：llm.kind=cloud + embedding.kind=mock  → 不需 torch，~300MB RAM
+#   完整模式：llm.kind=ollama + embedding.kind=bge   → 需 torch，~2GB RAM
+#   演示模式：llm.kind=mock + embedding.kind=mock    → 无外部依赖
+
 enterprise_id: demo
 enterprise_name: 示范母婴门店
-db_path: /app/data/instance.db
+db_path: ./data/instance.db
 system_prompt: |
   你是母婴垂类智能顾问，服务于门店员工，基于企业产品知识库回答育儿与产品问题。
   仅依据知识库内容作答，不编造；涉及婴幼儿健康须附免责声明。
@@ -15,9 +24,15 @@ llm:
   # 云 API 示例（kind=cloud 时填）：
   # base_url: https://api.openai.com/v1
   # api_key: sk-xxx
+  # DeepSeek 示例：
+  # base_url: https://api.deepseek.com/v1
+  # model: deepseek-chat
 
 embedding:
   kind: mock            # mock | bge-small-zh
+
+rerank:
+  kind: none            # none | bge-reranker-v2-m3
 
 wechat:
   bot_token: <从 iLink 开放平台获取的 bot token>

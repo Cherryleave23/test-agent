@@ -1,0 +1,79 @@
+# 依赖清单（声明式）— configure.ps1 读取此文件决定拉取哪些大依赖
+#
+# 三层分层策略：
+#   Tier 1: 稳定大文件，按 URL 拉取（本文件声明）
+#   Tier 2: 小依赖，捆绑在安装包（requirements-light.txt / requirements-full.txt）
+#   Tier 3: 易变代码，可插拔（src/ + enterprise.yaml + .env.local）
+#
+# 端侧部署人员可选：
+#   1) 在线拉取：按 url 字段从 PyPI/HuggingFace 下载
+#   2) 离线导入：指定本地路径（U 盘/共享目录），跳过下载
+#   3) 跳过：轻量模式不需要这些依赖
+
+# Python embeddable 运行时（所有模式都需要）
+python_embeddable:
+  url: "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
+  sha256: ""  # 留空则跳过校验；填写则下载后验证
+  dest: "runtime/python"
+  size_mb: 12
+  required: true
+  modes: [light, full, demo]
+
+# Tier 1 大依赖 — 仅 full 模式需要
+wheels:
+  # PyPI wheels（pip install 离线包）
+  - name: torch-cpu
+    pip: "torch>=2.2.0,<2.4.0"
+    url: ""  # 留空 = 从 PyPI 镜像拉取；填写 = 直接 URL
+    dest: "wheels/"
+    size_mb: 800
+    modes: [full]
+
+  - name: sentence-transformers
+    pip: "sentence-transformers>=3.0,<4.0"
+    url: ""
+    dest: "wheels/"
+    size_mb: 400
+    modes: [full]
+
+  - name: chromadb
+    pip: "chromadb>=0.5.0,<0.6.0"
+    url: ""
+    dest: "wheels/"
+    size_mb: 30
+    modes: [light, full]
+
+# 模型权重（HuggingFace）— 仅 full 模式需要
+models:
+  - name: bge-small-zh-v1.5
+    # 嵌入模型：BAAI/bge-small-zh-v1.5，512 维中文语义
+    repo_id: "BAAI/bge-small-zh-v1.5"
+    url: "https://huggingface.co/BAAI/bge-small-zh-v1.5/resolve/main/"
+    # 镜像选项（国内加速）：
+    mirror_url: "https://hf-mirror.com/BAAI/bge-small-zh-v1.5/resolve/main/"
+    files:
+      - "config.json"
+      - "model.safetensors"
+      - "tokenizer_config.json"
+      - "vocab.txt"
+      - "modules.json"
+      - "sentence_bert_config.json"
+    dest: "models/bge-small-zh-v1.5/"
+    size_mb: 100
+    modes: [full]
+
+  - name: bge-reranker-v2-m3
+    # 重排模型：BAAI/bge-reranker-v2-m3（可选，精度增强）
+    repo_id: "BAAI/bge-reranker-v2-m3"
+    url: "https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/main/"
+    mirror_url: "https://hf-mirror.com/BAAI/bge-reranker-v2-m3/resolve/main/"
+    files:
+      - "config.json"
+      - "model.safetensors"
+      - "tokenizer_config.json"
+      - "vocab.txt"
+      - "sentence_bert_config.json"
+    dest: "models/bge-reranker-v2-m3/"
+    size_mb: 568
+    modes: [full]
+    optional: true  # 可选依赖，configure.ps1 会询问是否拉取

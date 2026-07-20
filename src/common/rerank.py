@@ -43,6 +43,9 @@ class BgeReranker:
     直接复用已安装的 sentence-transformers 的 CrossEncoder 加载（与本项目 bge 嵌入
     同源 transformers 后端，已验证可用），无需另装 FlagEmbedding，避免依赖冲突、
     也不重复造轮子。惰性加载 + 单例复用。
+
+    可插拔设计：模型路径优先从插件管理器解析（本地插件目录），
+    无则回退到 HuggingFace repo id（CrossEncoder 自动下载）。
     """
 
     kind = "bge-reranker-v2-m3"
@@ -50,11 +53,25 @@ class BgeReranker:
     _name = "BAAI/bge-reranker-v2-m3"
 
     @classmethod
+    def _resolve_model_name(cls) -> str:
+        """通过插件管理器解析模型路径，实现可插拔。"""
+        try:
+            from common.plugins import PluginManager
+            pm = PluginManager()
+            resolved = pm.resolve_model("bge-reranker-v2-m3")
+            if resolved:
+                return resolved
+        except Exception:
+            pass
+        return cls._name
+
+    @classmethod
     def _get(cls):
         if cls._model is None:
             from sentence_transformers import CrossEncoder  # 惰性：仅真实重排路径才导入
 
-            cls._model = CrossEncoder(cls._name)
+            model_name_or_path = cls._resolve_model_name()
+            cls._model = CrossEncoder(model_name_or_path)
         return cls._model
 
     def rerank(self, query: str, docs: List[str]) -> List[float]:

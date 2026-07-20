@@ -1,0 +1,8 @@
+# 完整依赖（本地 bge embedding + cross-encoder reranker，含 torch）
+# 适用于：门店高配电脑（8GB+ RAM）+ Ollama 本地 LLM 或云 LLM
+# wheels 总大小：~1.2GB（torch CPU + transformers + sentence-transformers）
+pydantic>=2.0,<3.0
+pyyaml>=6.0,<7.0
+chromadb>=0.5.0,<0.6.0
+httpx>=0.27.0,<1.0
+sentence-transformers>=3.0,<4.0

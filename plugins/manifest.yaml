@@ -1,0 +1,89 @@
+# 插件清单：声明可选重型依赖（运行时 + 模型）
+#
+# 设计原则：
+#   - 安装包只含轻量核心（~80MB），重型依赖在此声明，配置时按需拉取/导入
+#   - 运行时插件（torch 等）季度级更新，模型插件几乎不变
+#   - 每个插件支持多来源：URL 下载 / 本地文件导入 / HuggingFace 镜像
+#   - SHA256 校验防篡改；configure.ps1 安装后写入 plugins/installed.lock
+#
+# 端侧配置时（configure.ps1）：
+#   1. 用户选「完整模式」→ 向导读取本清单 → 逐个拉取/导入
+#   2. 用户选「轻量模式」→ 跳过所有插件
+#   3. 用户可后续单独安装插件（plugins install bge-small-zh-v1.5）
+
+plugins:
+  # ── 运行时插件（Python 包）──
+  - id: torch-cpu
+    type: runtime
+    description: "PyTorch CPU 运行时（bge 嵌入/重排器的底层依赖）"
+    size_hint: "~800MB"
+    # 多来源：configure.ps1 按顺序尝试，第一个成功的生效
+    # 公司内网镜像优先 → PyPI 官方 → 本地导入
+    sources:
+      - kind: url
+        url: "https://download.pytorch.org/whl/cpu/torch-2.2.2%2Bcpu-cp311-win_amd64.whl"
+        sha256: ""  # TODO: 发布时填入实际哈希
+      - kind: pip
+        spec: "torch==2.2.2+cpu --index-url https://download.pytorch.org/whl/cpu"
+    requires_python: ">=3.11,<3.12"
+
+  - id: sentence-transformers
+    type: runtime
+    description: "sentence-transformers 库（bge 嵌入/重排器的加载框架）"
+    size_hint: "~50MB"
+    sources:
+      - kind: pip
+        spec: "sentence-transformers>=3.0,<4.0"
+    depends_on: [torch-cpu]
+
+  # ── 模型插件（模型文件）──
+  - id: bge-small-zh-v1.5
+    type: model
+    description: "BAAI/bge-small-zh-v1.5 中文语义嵌入模型（512 维）"
+    size_hint: "~100MB"
+    sources:
+      - kind: url
+        url: ""  # 发布时填入公司镜像 URL
+        sha256: ""
+      - kind: huggingface
+        repo: "BAAI/bge-small-zh-v1.5"
+      - kind: local
+        # configure.ps1 交互式询问本地路径
+    # 安装后路径：plugins/models/bge-small-zh-v1.5/
+    install_path: "models/bge-small-zh-v1.5"
+    depends_on: [sentence-transformers]
+
+  - id: bge-reranker-v2-m3
+    type: model
+    description: "BAAI/bge-reranker-v2-m3 多语言 cross-encoder 重排模型"
+    size_hint: "~600MB"
+    sources:
+      - kind: url
+        url: ""  # 发布时填入公司镜像 URL
+        sha256: ""
+      - kind: huggingface
+        repo: "BAAI/bge-reranker-v2-m3"
+      - kind: local
+    install_path: "models/bge-reranker-v2-m3"
+    depends_on: [sentence-transformers]
+
+# ── 插件组合预设（configure.ps1 按 preset 一键安装）──
+presets:
+  light:
+    description: "轻量模式：云 LLM + mock 嵌入，无需任何插件"
+    plugins: []
+
+  full:
+    description: "完整模式：本地 bge 嵌入 + cross-encoder 重排"
+    plugins:
+      - torch-cpu
+      - sentence-transformers
+      - bge-small-zh-v1.5
+      - bge-reranker-v2-m3
+
+  embed-only:
+    description: "嵌入模式：本地 bge 嵌入，不做重排（节省 reranker 600MB）"
+    plugins:
+      - torch-cpu
+      - sentence-transformers
+      - bge-small-zh-v1.5

@@ -12,9 +12,29 @@
 ---
 
 ## 一、部署形态
+
+### 1A Docker 部署（服务器/高配门店）
 - **Docker + docker-compose**：每企业一个 compose project / 命名空间（项目名含 `enterprise_id`）。
 - **1 家 1 实例**：每企业独立容器 + 独立数据卷 + 独立配置，**物理/逻辑不串**（铁律）。
 - **配置即定制**：`conf.yaml` 驱动——产品结构、embedding 模型、LLM provider、iLink bot 凭证、微信策略。
+
+### 1B Windows 直装部署（低配门店，G6+）
+- **Python embeddable + 离线 wheels**：不要求门店预装 Python；安装包含 Python 3.11 embeddable。
+- **依赖三层分层（核心策略）**：
+  - **Tier 1 — 稳定大文件（按 URL 拉取）**：torch CPU (~800MB)、sentence-transformers (~400MB)、
+    bge 模型权重 (~100MB)。这些文件迭代缓慢（半年一更）、体积大、且与业务代码解耦。
+    **不在安装包中捆绑**，由配置向导 `configure.ps1` 按 `dependency-manifest.yaml` 声明的 URL
+    在配置阶段拉取到本地 `wheels/` 和 `models/` 目录。支持：指定 PyPI 镜像、HuggingFace 镜像、
+    或直接文件导入（离线 U 盘路径）。
+  - **Tier 2 — 小依赖（捆绑在安装包）**：pydantic、pyyaml、chromadb、httpx（共 ~60MB）。
+    体积小、更新频率低，捆绑分发比按 URL 拉取更快更可靠。
+  - **Tier 3 — 易变代码（可插拔）**：`src/` 应用源码、`deploy/enterprise.yaml` 配置、system_prompt。
+    独立于 Python 运行时目录，升级时只需替换 `app/` 目录（`git pull` 或拷贝覆盖），
+    不触碰 Python embeddable 和已安装的 wheels。
+- **配置向导（端侧模式选择权）**：`configure.ps1` 交互式选择 LLM/embedding 模式后，
+  生成 `.env.local` 环境变量文件。`EnterpriseConfig.from_yaml_with_env()` 加载时
+  环境变量优先级高于 yaml——**端侧不改 yaml 文件即可切换模式**。
+- **1 家 1 实例**铁律不变：每企业独立数据目录 + 独立配置。
 
 ---
 
@@ -74,6 +94,8 @@
 - `test_deploy_multi_tenant.py`：两实例数据互不串。
 - `test_deploy_upgrade.py`：升级保留数据卷且兼容，回滚可用。
 - `test_deploy_network.py`：出网白名单可达性校验（ilinkai / CDN 域名）。
+- `test_deploy_env_override.py`：环境变量覆盖 yaml 配置（端侧不改文件即切模式）。
+- `test_deploy_manifest.py`：依赖清单校验（Tier1 URL 可达性 + 校验和 + 模式匹配）。
 
 ---
 
