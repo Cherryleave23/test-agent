@@ -34,12 +34,11 @@ class ResolutionResult:
     raw: str = ""
 
 
-_SYSTEM_PROMPT = """你是母婴导购助手的「宝宝意图消歧器」。根据对话上下文，判断员工当前在聊哪个宝宝，并抽取宝宝属性。
+# 稳定前缀（Prompt Caching 缓存对象）：纯指令，不含任何每轮变量。
+# 生产部署时可在其后追加「企业定制产品结构/消歧规则」，进一步放大缓存收益。
+_SYSTEM_INSTRUCTION = """你是母婴导购助手的「宝宝意图消歧器」。根据对话上下文，判断员工当前在聊哪个宝宝，并抽取宝宝属性。
 
-已知该员工的客户与宝宝清单（JSON 数组，可能为空）：
-{known}
-
-本会话当前焦点宝宝 id：{focus}（若为 null 表示尚无焦点；用「他/她/宝宝/这个」等代词时默认指它）。
+（该员工的客户与宝宝清单、本会话焦点宝宝 id 将在下方以结构化形式提供；请勿在回复中复述它们。）
 
 只输出一个 JSON 对象，不要解释、不要代码块标记。字段：
 - action: 字符串。chat=在聊已建档案的宝宝；new_baby=聊到一个全新且能识别身份的宝宝（需建档）；new_customer=连客户都是新的；confirm=员工在确认/认可刚才建的档案；merge=要把某宝宝合并到另一个；delete=要删除某宝宝档案。
@@ -210,6 +209,11 @@ async def resolve_and_extract(
 
     - 无宝宝信号 → 短路，沿用焦点，规则抽取（省一次 LLM）。
     - 否则一次 LLM 调用，解析为 ResolutionResult；失败兜底。
+
+    Prompt Caching：稳定前缀（指令 + 已知清单 `known`）作为首条 system 消息，
+    每轮变量（`focus` + 历史 + 当前句）置于其后并开启 `cache_control`——
+    同员工会话中前缀高度稳定（仅新增宝宝时变化），provider 复用前缀可显著降低
+    input token 费用；切换焦点宝宝不破坏缓存（焦点在断点之后）。
     """
     if not _has_baby_signal(current_msg, known):
         return ResolutionResult(
@@ -217,12 +221,21 @@ async def resolve_and_extract(
             extracted=_rule_extract(current_msg),
         )
     known_json = json.dumps(known, ensure_ascii=False)
+    # 稳定前缀：指令 + 已知清单（同员工跨轮一致，缓存命中率高）
+    stable_prefix = (
+        _SYSTEM_INSTRUCTION
+        + "\n\n已知该员工的客户与宝宝清单（JSON 数组）：\n"
+        + known_json
+    )
+    # 每轮变量：焦点 + 历史 + 当前句（在缓存断点之后，不破坏前缀稳定性）
+    user_turn = (
+        f"本会话当前焦点宝宝 id：{focus_baby_id}"
+        f"（若为 null 表示尚无焦点；用「他/她/宝宝/这个」等代词时默认指它）。\n\n"
+        f"{history_text}\nuser: {current_msg}"
+    )
     messages = [
-        {
-            "role": "system",
-            "content": _SYSTEM_PROMPT.format(known=known_json, focus=focus_baby_id),
-        },
-        {"role": "user", "content": f"{history_text}\nuser: {current_msg}"},
+        {"role": "system", "content": stable_prefix},
+        {"role": "user", "content": user_turn},
     ]
-    raw = await provider.complete(messages)
+    raw = await provider.complete(messages, cache_control=True)
     return _parse_resolution(raw, known, focus_baby_id)

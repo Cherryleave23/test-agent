@@ -7,6 +7,7 @@
   阶段2（消歧）：P4 快速切换意图消歧 / P5 代词指代
   阶段3（网关）：P2 混合式安全网(自动建档+第三方不建) / P3 主动归档跨轮累积
   阶段4（注入）：P6 焦点宝宝档案块注入 system prompt / P9 向后兼容
+  优化（Prompt Caching）：P17 稳定前缀置首且跨轮一致(缓存命中契约) + cache_control 断点
 
 直接运行：python3 test_baby_profile.py  → 退出码 0 全过，非 0 有失败。
 """
@@ -25,6 +26,7 @@ from baby.store import BabyProfileStore  # noqa: E402
 from baby.resolution import resolve_and_extract  # noqa: E402
 from baby.archive import resolve_and_archive  # noqa: E402
 from agent.pipeline import Agent  # noqa: E402
+from agent.providers import _apply_cache_control  # noqa: E402
 from common.config import EnterpriseConfig  # noqa: E402
 from common.db import connect  # noqa: E402
 
@@ -506,6 +508,85 @@ async def _p16_focus_stable_cache():
     assert r2.focus_baby_id == bid2
 
 
+# ---------------------------------------------------------------------------
+# P17 Prompt Caching：稳定前缀置首且跨轮一致(缓存命中契约) + cache_control 断点
+# ---------------------------------------------------------------------------
+async def _p17_prompt_caching():
+    store = BabyProfileStore(_tmp_db())
+    cid1 = store.get_or_create_customer("ent1", "emp1", "张姐")
+    bid1 = store.create_baby(BabyProfile(None, "ent1", "emp1", cid1, "壮壮", status="confirmed"))
+    cid2 = store.get_or_create_customer("ent1", "emp1", "李姐")
+    bid2 = store.create_baby(BabyProfile(None, "ent1", "emp1", cid2, "妞妞", status="confirmed"))
+    known = store.list_for_employee("ent1", "emp1")
+
+    captured = {}
+
+    class SpyProvider:
+        async def complete(self, messages, retrieved_hits=None, **kw):
+            captured["messages"] = messages
+            captured["cache_control"] = kw.get("cache_control", False)
+            return json.dumps({"action": "chat", "baby": "", "extracted": {},
+                               "is_third_party": False, "is_hypothetical": False},
+                              ensure_ascii=False)
+
+    # 第一次调用（focus=bid1）
+    await resolve_and_extract("user: 壮壮6个月", "壮壮喝1段", known, bid1, SpyProvider())
+    assert captured.get("cache_control") is True, "应开启 cache_control"
+    msgs1 = captured["messages"]
+    assert msgs1[0]["role"] == "system", "稳定前缀必须是首条 system 消息"
+    sys1 = msgs1[0]["content"]
+    # 稳定前缀 = 指令 + known 清单（客户名来自 known，证明 known 已纳入缓存前缀）
+    assert "宝宝意图消歧器" in sys1
+    assert "张姐" in sys1, "known 清单应在缓存前缀内"
+    # 稳定前缀不得包含每轮变量（焦点 id / 当前句）
+    assert "本会话当前焦点宝宝 id" not in sys1, "焦点变量不得进入缓存前缀"
+    assert "喝1段" not in sys1, "当前句不得进入缓存前缀"
+    # 变量在 user turn，且当前句为其末段
+    assert msgs1[1]["role"] == "user"
+    assert "本会话当前焦点宝宝 id" in msgs1[1]["content"]
+    assert msgs1[1]["content"].split("\nuser: ")[-1] == "壮壮喝1段"
+
+    # 缓存命中契约：相同 known、不同 focus/当前句 → system 内容完全一致
+    await resolve_and_extract("user: 妞妞2岁", "妞妞换3段", known, bid2, SpyProvider())
+    sys2 = captured["messages"][0]["content"]
+    assert sys1 == sys2, "相同 known 下稳定前缀必须一致（缓存命中）"
+
+    # 新增宝宝 → known 变化 → 前缀变化（缓存未命中，重新缓存）
+    store.create_baby(BabyProfile(None, "ent1", "emp1", cid1, "小宝", status="confirmed"))
+    known2 = store.list_for_employee("ent1", "emp1")
+    await resolve_and_extract("", "小宝喝什么", known2, bid1, SpyProvider())
+    sys3 = captured["messages"][0]["content"]
+    assert sys3 != sys1, "known 变化后稳定前缀应变化（缓存未命中）"
+    assert "小宝" in sys3, "新增宝宝应进入缓存前缀"
+
+    # Anthropic 断点转换：首条 system 内容应包成 content-block 并带 cache_control
+    class _CfgAnth:
+        kind = "anthropic"
+
+    anth = _apply_cache_control(
+        [{"role": "system", "content": sys1}, {"role": "user", "content": "x"}],
+        _CfgAnth(),
+    )
+    assert isinstance(anth[0]["content"], list), "Anthropic 应把 system 内容包成列表"
+    assert anth[0]["content"][0].get("cache_control") == {"type": "ephemeral"}
+
+    # OpenAI 兼容（cloud）不改写请求体（靠自动前缀缓存）
+    class _CfgCloud:
+        kind = "cloud"
+
+    cloud = _apply_cache_control(
+        [{"role": "system", "content": sys1}, {"role": "user", "content": "x"}],
+        _CfgCloud(),
+    )
+    assert cloud[0]["content"] == sys1, "cloud 端点不应改写请求体"
+
+    # 缓存收益量化契约：缓存前缀占整体 prompt 主体（体现 50-90% input 节省潜力）
+    total_len = sum(len(m["content"]) for m in captured["messages"]
+                    if isinstance(m.get("content"), str))
+    ratio = len(sys1) / total_len
+    assert ratio > 0.5, f"缓存前缀应占 prompt 主体(>50%)，实际 {ratio:.2%}"
+
+
 CHECKS = [
     ("P1 显式建档(客户+宝宝)", _p1_explicit_create),
     ("P7 (ent,emp) 隔离", _p7_isolation),
@@ -523,6 +604,7 @@ CHECKS = [
     ("P14 网关级连续失败熔断", _p14_circuit_breaker),
     ("P15 跨会话写锁并发upsert", _p15_concurrent_write_lock),
     ("P16 焦点稳定结果缓存(跳LLM+切换仍检)", _p16_focus_stable_cache),
+    ("P17 Prompt Caching(稳定前缀命中契约+cache_control断点)", _p17_prompt_caching),
 ]
 
 

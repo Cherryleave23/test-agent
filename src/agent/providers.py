@@ -4,6 +4,11 @@
 - OllamaProvider：端侧本地模型（/api/generate）。
 - CloudProvider：云 API（OpenAI 兼容 chat/completions）。
 - ProviderFactory：按配置实例化。
+
+Prompt Caching：``complete`` 新增 ``cache_control`` 开关。开启时，provider 把
+「稳定前缀」（通常是首条 system 消息）标记为可缓存断点，使同员工/同会话复用
+前缀、降低 input token 费用。OpenAI 兼容端点靠自动前缀缓存（稳定前缀置首即生效）；
+Anthropic 端点需显式 ``cache_control`` 断点（见 :func:`_apply_cache_control`）。
 """
 from __future__ import annotations
 
@@ -13,12 +18,44 @@ from typing import List, Dict, Optional
 from common.config import LLMConfig
 
 
+def _apply_cache_control(messages: List[Dict], cfg: LLMConfig) -> List[Dict]:
+    """按 provider 种类把「稳定前缀」标记为可缓存断点。
+
+    - ``anthropic``：把首条 system 消息的内容包成 content-block 列表，并加
+      ``cache_control: {type: "ephemeral"}`` 断点，使该前缀被缓存。
+    - 其余（OpenAI 兼容 / ollama / mock）：自动前缀缓存已对「置首的稳定前缀」生效，
+      无需改写请求体，原样返回即可（避免在标准 OpenAI 上发送不被接受的字段）。
+
+    约定：调用方必须把「稳定、跨调用一致」的内容放在 ``messages[0]``（system），
+    把每轮变量（当前句/历史/焦点）放在其后——这样无论哪种 provider，前缀都能命中缓存。
+    """
+    if getattr(cfg, "kind", None) != "anthropic":
+        return messages
+    out: List[Dict] = []
+    for i, m in enumerate(messages):
+        if i == 0 and m.get("role") == "system" and isinstance(m.get("content"), str):
+            out.append({
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": m["content"],
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            })
+        else:
+            out.append(m)
+    return out
+
+
 class LLMProvider(ABC):
     @abstractmethod
     async def complete(
         self,
         messages: List[Dict[str, str]],
         retrieved_hits: Optional[list] = None,
+        cache_control: bool = False,
         **kw,
     ) -> str:
         ...
@@ -27,7 +64,8 @@ class LLMProvider(ABC):
 class MockProvider(LLMProvider):
     """测试用确定性 provider：直接基于检索命中生成回答，便于断言闭环正确性。"""
 
-    async def complete(self, messages, retrieved_hits=None, **kw) -> str:
+    async def complete(self, messages, retrieved_hits=None,
+                       cache_control: bool = False, **kw) -> str:
         if not retrieved_hits:
             return "抱歉，当前知识库中暂无相关产品信息，建议您补充企业产品资料后再咨询。"
         # 零售问答：优先采用产品类命中（b_milk/b_nutrition），更贴合用户意图；
@@ -64,7 +102,8 @@ class OllamaProvider(LLMProvider):
         self.cfg = cfg
         self.base = (cfg.base_url or "http://localhost:11434").rstrip("/")
 
-    async def complete(self, messages, retrieved_hits=None, **kw) -> str:
+    async def complete(self, messages, retrieved_hits=None,
+                       cache_control: bool = False, **kw) -> str:
         import httpx  # type: ignore
 
         # ollama /api/chat 默认 stream=true 返回 NDJSON，r.json() 会解析失败；
@@ -86,8 +125,14 @@ class CloudProvider(LLMProvider):
         self.cfg = cfg
         self.base = (cfg.base_url or "https://api.openai.com/v1").rstrip("/")
 
-    async def complete(self, messages, retrieved_hits=None, **kw) -> str:
+    async def complete(self, messages, retrieved_hits=None,
+                       cache_control: bool = False, **kw) -> str:
         import httpx  # type: ignore
+
+        # Prompt Caching：仅对支持显式断点的 provider（Anthropic）改写请求体；
+        # OpenAI 兼容端点靠自动前缀缓存（稳定前缀已置首），无需改动。
+        if cache_control:
+            messages = _apply_cache_control(messages, self.cfg)
 
         headers = {"Authorization": f"Bearer {self.cfg.api_key or ''}"}
         async with httpx.AsyncClient(timeout=60) as c:
