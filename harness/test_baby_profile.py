@@ -12,6 +12,7 @@
 """
 import os
 import sys
+import time
 import tempfile
 import json
 import asyncio
@@ -25,6 +26,7 @@ from baby.resolution import resolve_and_extract  # noqa: E402
 from baby.archive import resolve_and_archive  # noqa: E402
 from agent.pipeline import Agent  # noqa: E402
 from common.config import EnterpriseConfig  # noqa: E402
+from common.db import connect  # noqa: E402
 
 
 def _tmp_db():
@@ -307,6 +309,165 @@ class _DummyStore:
         return []
 
 
+# ---------------------------------------------------------------------------
+# P10 pending 防污染：同名跨客户不误合并（旧 pending 不被新真实宝宝复用）
+# ---------------------------------------------------------------------------
+async def _p10_pending_no_pollution():
+    store = BabyProfileStore(_tmp_db())
+    cid_l = store.get_or_create_customer("ent1", "emp1", "李姐")
+    bid_l = store.create_baby(BabyProfile(None, "ent1", "emp1", cid_l, "壮壮", status="pending"))
+
+    class NewZhuangProvider:
+        async def complete(self, messages, retrieved_hits=None, **kw):
+            return json.dumps({"action": "new_baby", "customer": "张姐", "baby": "壮壮",
+                               "extracted": {"baby_age": "8个月"},
+                               "is_third_party": False, "is_hypothetical": False},
+                              ensure_ascii=False)
+
+    r = await resolve_and_archive(store, NewZhuangProvider(), "ent1", "emp1", "",
+                                  "张姐家壮壮8个月了", None)
+    # 必须为张姐新建一个壮壮，绝不与李姐的 pending 误合并
+    assert r.created is True
+    assert r.focus_baby_id != bid_l
+    bz = store.get_baby(r.focus_baby_id)
+    assert bz.name == "壮壮" and bz.baby_age == "8个月"
+    # 李姐的 pending 壮壮完好无损（无属性被误并入）
+    bl = store.get_baby(bid_l)
+    assert bl.baby_age == "" and bl.customer_id == cid_l
+
+
+# ---------------------------------------------------------------------------
+# P11 同名多客户歧义：未给客户名时不自动匹配（防跨客户误配）
+# ---------------------------------------------------------------------------
+async def _p11_ambiguity_no_match():
+    store = BabyProfileStore(_tmp_db())
+    cid1 = store.get_or_create_customer("ent1", "emp1", "张姐")
+    store.create_baby(BabyProfile(None, "ent1", "emp1", cid1, "壮壮", status="confirmed"))
+    cid2 = store.get_or_create_customer("ent1", "emp1", "李姐")
+    store.create_baby(BabyProfile(None, "ent1", "emp1", cid2, "壮壮", status="pending"))
+    known = store.list_for_employee("ent1", "emp1")
+
+    class AmbigProvider:
+        async def complete(self, messages, retrieved_hits=None, **kw):
+            return json.dumps({"action": "chat", "baby": "壮壮", "customer": "",
+                               "extracted": {}, "is_third_party": False,
+                               "is_hypothetical": False}, ensure_ascii=False)
+
+    r = await resolve_and_extract("user: hi", "壮壮喝1段", known, None, AmbigProvider())
+    assert r.baby_id is None, "同名多客户且未指定客户应歧义不匹配"
+
+
+# ---------------------------------------------------------------------------
+# P12 过期待确认清理：prune_stale_pending 只删陈旧 pending，confirmed 不动
+# ---------------------------------------------------------------------------
+def _p12_prune_stale_pending():
+    store = BabyProfileStore(_tmp_db())
+    cid = store.get_or_create_customer("ent1", "emp1", "张姐")
+    store.create_baby(BabyProfile(None, "ent1", "emp1", cid, "豆豆", status="pending"))  # 新鲜
+    old_bid = store.create_baby(BabyProfile(None, "ent1", "emp1", cid, "点点", status="pending"))
+    with connect(store.db_path) as conn:
+        conn.execute("UPDATE babies SET created_at=? WHERE baby_id=?",
+                     (time.time() - 90 * 86400, old_bid))
+        conn.commit()
+    conf_bid = store.create_baby(BabyProfile(None, "ent1", "emp1", cid, "康康", status="confirmed"))
+
+    n = store.prune_stale_pending(days=30)
+    assert n == 1
+    assert store.get_baby(old_bid) is None          # 陈旧 pending 已清
+    assert store.get_baby(conf_bid) is not None      # confirmed 永不动
+    assert len(store.list_for_employee("ent1", "emp1")) == 2  # 新鲜 pending + confirmed 留存
+
+
+# ---------------------------------------------------------------------------
+# P13 消歧失败可观测：parse_failed 标志 + 兜底沿用焦点不崩
+# ---------------------------------------------------------------------------
+async def _p13_parse_failed_flag():
+    store = BabyProfileStore(_tmp_db())
+    cid = store.get_or_create_customer("ent1", "emp1", "张姐")
+    bid = store.create_baby(BabyProfile(None, "ent1", "emp1", cid, "壮壮", status="confirmed"))
+    known = store.list_for_employee("ent1", "emp1")
+
+    class GarbageProvider:
+        async def complete(self, messages, retrieved_hits=None, **kw):
+            return "【系统】模型返回了无法解析的内容 502"
+
+    r = await resolve_and_extract("user: hi", "壮壮喝1段", known, bid, GarbageProvider())
+    assert r.parse_failed is True
+    assert r.baby_id == bid          # 兜底沿用焦点，不崩溃
+    assert store.get_baby(bid).baby_age == ""  # 失败不误归档
+
+
+# ---------------------------------------------------------------------------
+# P14 网关级连续失败熔断：≥阈值后降级为仅产品问答，不再建档/归档
+# ---------------------------------------------------------------------------
+async def _p14_circuit_breaker():
+    from wechat.gateway import WechatGateway, BABY_RESOLUTION_FAIL_THRESHOLD
+    from wechat.ilink_client import IncomingMessage
+    from session.store import SessionStore
+    from agent.pipeline import Agent
+    from common.config import EnterpriseConfig
+
+    cfg = EnterpriseConfig(enterprise_id="ent1", baby_profile_enabled=True)
+    session = SessionStore(_tmp_db())
+    baby_store = BabyProfileStore(_tmp_db())
+    # 种入已知宝宝，使消息触发 LLM 消歧（否则会被短路、不调 LLM、无解析失败）
+    cid = baby_store.get_or_create_customer("ent1", "emp1", "张姐")
+    baby_store.create_baby(BabyProfile(None, "ent1", "emp1", cid, "壮壮", status="confirmed"))
+    agent = Agent(cfg, _DummyStore())
+    agent.provider = _GarbageProvider()
+
+    class MockClient:
+        def __init__(self):
+            self.sent = []
+        async def send_message(self, emp, text, ctx):
+            self.sent.append(text)
+        async def get_updates(self, buf):
+            return None
+
+    gw = WechatGateway(cfg, session, agent, MockClient(), baby_store)
+
+    def mk(i):
+        return IncomingMessage(message_id=f"m{i}", from_user_id="emp1", content="壮壮怎么样")
+
+    for i in range(3):
+        await gw.handle_message(mk(i), None)
+    sid = session.get_or_create("ent1", "emp1", "emp1")
+    assert session.get_resolution_fails(sid) >= BABY_RESOLUTION_FAIL_THRESHOLD
+    # 已熔断 → 跳过建档/归档，不应新建任何宝宝
+    before = len(baby_store.list_for_employee("ent1", "emp1"))
+    await gw.handle_message(mk(99), None)
+    after = len(baby_store.list_for_employee("ent1", "emp1"))
+    assert after == before, "熔断后不应再自动建档"
+
+
+class _GarbageProvider:
+    async def complete(self, messages, retrieved_hits=None, **kw):
+        return "【系统】502 bad gateway"
+
+
+# ---------------------------------------------------------------------------
+# P15 跨会话写锁：并发 upsert 同一宝宝不丢失更新
+# ---------------------------------------------------------------------------
+def _p15_concurrent_write_lock():
+    import threading
+    store = BabyProfileStore(_tmp_db())
+    cid = store.get_or_create_customer("ent1", "emp1", "张姐")
+    bid = store.create_baby(BabyProfile(None, "ent1", "emp1", cid, "壮壮", status="confirmed"))
+
+    def worker(tag, n):
+        for _ in range(n):
+            store.upsert_baby_attrs(bid, BabyProfile(
+                None, "ent1", "emp1", cid, "壮壮", allergens=[tag]))
+
+    ths = [threading.Thread(target=worker, args=(t, 50)) for t in ("A", "B")]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join()
+    b = store.get_baby(bid)
+    assert "A" in b.allergens and "B" in b.allergens, f"并发 upsert 丢失更新：{b.allergens}"
+
+
 CHECKS = [
     ("P1 显式建档(客户+宝宝)", _p1_explicit_create),
     ("P7 (ent,emp) 隔离", _p7_isolation),
@@ -317,6 +478,12 @@ CHECKS = [
     ("P3 主动归档跨轮累积", _p3_cross_turn_archive),
     ("P6 焦点宝宝档案块注入system", _p6_baby_block_injection),
     ("P9 向后兼容(constraints仍生效)", _p9_backward_compat),
+    ("P10 pending防污染(同名跨客户不误合并)", _p10_pending_no_pollution),
+    ("P11 同名歧义不误配", _p11_ambiguity_no_match),
+    ("P12 过期待确认清理", _p12_prune_stale_pending),
+    ("P13 消歧失败可观测(parse_failed)", _p13_parse_failed_flag),
+    ("P14 网关级连续失败熔断", _p14_circuit_breaker),
+    ("P15 跨会话写锁并发upsert", _p15_concurrent_write_lock),
 ]
 
 

@@ -30,6 +30,7 @@ class ResolutionResult:
     extracted: BabyProfile = None  # 抽取的宝宝属性（ent/emp/cid 由调用方补全）
     is_third_party: bool = False   # 聊的是别人/同事的宝宝（不建档）
     is_hypothetical: bool = False  # 假设/举例（不建档）
+    parse_failed: bool = False     # LLM 输出解析失败（兜底退化，供熔断统计）
     raw: str = ""
 
 
@@ -92,12 +93,23 @@ def _norm(s: str) -> str:
 
 
 def _match_known(known: List[dict], customer: str, baby: str):
-    """按 客户名/宝宝名 在已知清单中定位，返回 (customer_id, baby_id) 或 (None, None)。"""
+    """按 客户名/宝宝名 在已知清单中定位，返回 (customer_id, baby_id) 或 (None, None)。
+
+    防跨客户误配（缺陷 B）：给了客户名时**只**做 (客户,宝宝) 精确匹配，绝不跨客户按宝宝名兜底；
+    仅给宝宝名且全局唯一才匹配；同名多客户视为歧义返回 None（不自动匹配，交回焦点/显式建档）。
+    """
     nb, nc = _norm(baby), _norm(customer)
-    if nb:
+    if nb and nc:
         for it in known:
-            if _norm(it.get("baby_name", "")) == nb:
+            if (_norm(it.get("baby_name", "")) == nb
+                    and _norm(it.get("customer_name", "")) == nc):
                 return it.get("customer_id"), it.get("baby_id")
+        return None, None  # 给了客户但无精确(客户,宝宝) → 视为新宝宝，不跨客户误配
+    if nb:
+        hits = [it for it in known if _norm(it.get("baby_name", "")) == nb]
+        if len(hits) == 1:
+            return hits[0].get("customer_id"), hits[0].get("baby_id")
+        return None, None  # 同名多客户 → 歧义，不自动匹配
     if nc:
         matches = [it for it in known if _norm(it.get("customer_name", "")) == nc]
         if len(matches) == 1:
@@ -112,16 +124,16 @@ def _parse_resolution(raw: str, known: List[dict], focus_baby_id: Optional[int])
     """解析 LLM 输出为 ResolutionResult；失败兜底退化为规则抽取 + 沿用焦点。"""
     if not raw:
         return ResolutionResult(action="chat", baby_id=focus_baby_id,
-                                extracted=_rule_extract(""))
+                                extracted=_rule_extract(""), parse_failed=True)
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     if not m:
         return ResolutionResult(action="chat", baby_id=focus_baby_id,
-                                extracted=_rule_extract(raw))
+                                extracted=_rule_extract(raw), parse_failed=True)
     try:
         d = json.loads(m.group(0))
     except (json.JSONDecodeError, TypeError):
         return ResolutionResult(action="chat", baby_id=focus_baby_id,
-                                extracted=_rule_extract(raw))
+                                extracted=_rule_extract(raw), parse_failed=True)
 
     customer = d.get("customer") or ""
     baby = d.get("baby") or ""

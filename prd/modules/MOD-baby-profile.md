@@ -75,6 +75,12 @@
 | P3 | 主动归档跨轮累积：抽取属性 upsert 进正确宝宝、跨轮保留并累加 | `archive.py` | PASS |
 | P6 | 焦点宝宝档案块注入 system prompt（`【当前宝宝档案】`） | `pipeline.py._build_messages` | PASS |
 | P9 | 向后兼容：不传 baby_block 无档案块；既有用户约束块注入不受影响 | `pipeline.py._build_messages` | PASS |
+| P10 | **pending 防污染**：同名跨客户不误合并（旧 pending 不被新真实宝宝复用） | `store.find_baby_by_name`(仅 confirmed) + `_match_known`(客户,宝宝)精确优先 | PASS |
+| P11 | 同名多客户歧义：未给客户名时不自动匹配（防跨客户误配） | `resolution._match_known` | PASS |
+| P12 | 过期待确认清理：`prune_stale_pending` 只删陈旧 pending，confirmed 不动 | `store.prune_stale_pending` | PASS |
+| P13 | 消歧失败可观测：`parse_failed` 标志 + 兜底沿用焦点不崩 | `resolution` + `archive` | PASS |
+| P14 | 网关级连续失败熔断：≥阈值降级为仅产品问答，不再建档/归档 | `gateway` + `session_resolution_fails` | PASS |
+| P15 | 跨会话写锁：并发 upsert 同一宝宝不丢失更新 | `store._baby_locks` | PASS |
 
 > 零破坏论证：`baby_block` 为可选形参、默认 `None`；网关仅在 `baby_profile_enabled` 且 `baby_store` 非 None 时接线；
 > `MockProvider` 忽略 system prompt → 注入档案块不改 Mock 回答；既有 8 套测试不受影响（默认门禁 9/9 绿）。
@@ -166,10 +172,12 @@ resolve_and_archive(store, provider, ent, emp, history_text, current_msg, focus_
 | 风险 | 缓解 |
 |------|------|
 | 把别人的/假设的宝宝误建档 | `is_third_party`/`is_hypothetical` 安全网，不落库 |
-| 快速切换时归错宝宝 | 每轮 LLM 实体链接 + 已知清单 `_match_known` 定位 + 焦点兜底 |
-| 自动建档污染（重复/错客户） | `find_baby_by_name` 防重 + `pending` 待确认安全网 |
+| 快速切换时归错宝宝 | 每轮 LLM 实体链接 + 已知清单 `_match_known`(客户,宝宝)精确优先 + 焦点兜底 |
+| 自动建档污染（重复/错客户） | `find_baby_by_name` 仅匹配 confirmed（pending 不自动复用）+ `_match_known` 同名歧义不误配 + pending 待确认安全网 |
 | 跨员工泄露宝宝档案 | `(ent,emp)` 隔离 + `list_for_employee` 仅本员工 |
-| LLM 输出解析失败 | 兜底退化为规则抽取 + 沿用焦点，不静默丢属性 |
+| LLM 输出解析失败 | 兜底退化为规则抽取 + 沿用焦点；`parse_failed` 标志 + 会话级连续失败熔断（≥3 轮降级仅产品问答并告警） |
+| 跨会话并发写竞态 | `BabyProfileStore._baby_locks` 按 baby_id 串行化 upsert/merge/delete（仿 SessionStore 锁注册表） |
+| 过期待确认累积 | `prune_stale_pending(days)` 清理陈旧 pending，confirmed 永不动 |
 | 短路由成本 | 无信号短路，跳过 LLM 调用 |
 
 ---

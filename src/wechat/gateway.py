@@ -27,6 +27,9 @@ from wechat.ilink_client import ILinkClient, IncomingMessage
 
 logger = logging.getLogger(__name__)
 
+# 宝宝消歧连续解析失败阈值：达到即熔断降级为「仅产品问答」（缺陷 A 防静默归错档）
+BABY_RESOLUTION_FAIL_THRESHOLD = 3
+
 
 class WechatGateway:
     def __init__(self, cfg: EnterpriseConfig, session: SessionStore,
@@ -72,16 +75,36 @@ class WechatGateway:
             baby_block = None
             if self.cfg.baby_profile_enabled and self.baby_store is not None:
                 focus_before = self.session.get_focus_baby(sid)
-                arch = await resolve_and_archive(
-                    self.baby_store, self.agent.provider, ent, emp,
-                    early_text, msg.content, focus_before,
-                )
-                self.session.set_focus_baby(sid, arch.focus_baby_id)
-                if arch.baby is not None:
-                    cust = self.baby_store.get_customer(arch.baby.customer_id)
-                    baby_block = arch.baby.to_prompt_block(
-                        customer_name=cust.name if cust else ""
+                fails = self.session.get_resolution_fails(sid)
+                if fails >= BABY_RESOLUTION_FAIL_THRESHOLD:
+                    # 熔断：连续 N 轮消歧解析失败 → 降级为仅产品问答，不再建档/归档
+                    logger.warning(
+                        "宝宝消歧连续失败 %d 轮（>=阈值 %d），本会话降级为仅产品问答",
+                        fails, BABY_RESOLUTION_FAIL_THRESHOLD,
                     )
+                    if focus_before is not None:
+                        b = self.baby_store.get_baby(focus_before)
+                        if b is not None:
+                            cust = self.baby_store.get_customer(b.customer_id)
+                            baby_block = b.to_prompt_block(
+                                customer_name=cust.name if cust else ""
+                            )
+                else:
+                    arch = await resolve_and_archive(
+                        self.baby_store, self.agent.provider, ent, emp,
+                        early_text, msg.content, focus_before,
+                    )
+                    # 熔断计数：解析失败累加，成功重置（缺陷 A）
+                    if arch.parse_failed:
+                        self.session.inc_resolution_fails(sid)
+                    else:
+                        self.session.reset_resolution_fails(sid)
+                    self.session.set_focus_baby(sid, arch.focus_baby_id)
+                    if arch.baby is not None:
+                        cust = self.baby_store.get_customer(arch.baby.customer_id)
+                        baby_block = arch.baby.to_prompt_block(
+                            customer_name=cust.name if cust else ""
+                        )
 
             ans = await self.agent.answer(
                 msg.content, history, constraints=stored, baby_block=baby_block

@@ -24,6 +24,7 @@ class ArchiveResult:
     baby: Optional[BabyProfile]   # 供注入 prompt 的「当前焦点档案」（可能为 None）
     created: bool = False          # 本轮回合是否新建了宝宝档案
     action: str = "chat"
+    parse_failed: bool = False     # 本轮 LLM 消歧解析失败（供会话级熔断统计）
 
 
 async def resolve_and_archive(
@@ -46,6 +47,7 @@ async def resolve_and_archive(
             focus_baby_id=focus_baby_id,
             baby=store.get_baby(focus_baby_id) if focus_baby_id else None,
             action=res.action,
+            parse_failed=res.parse_failed,
         )
 
     action = res.action
@@ -62,7 +64,8 @@ async def resolve_and_archive(
             store.delete_baby(bid)
             if focus_baby_id == bid:
                 focus_baby_id = None
-            return ArchiveResult(focus_baby_id=focus_baby_id, baby=None, action=action)
+            return ArchiveResult(focus_baby_id=focus_baby_id, baby=None,
+                                 action=action, parse_failed=res.parse_failed)
         # merge：合并需源/目标双名，当前消歧仅给目标；无可靠源则退化为 upsert 到目标，
         #        不做危险自动合并（可由后续显式修正指令增强）
         focus_baby_id = bid
@@ -70,6 +73,7 @@ async def resolve_and_archive(
             focus_baby_id=focus_baby_id,
             baby=store.get_baby(bid),
             action=action,
+            parse_failed=res.parse_failed,
         )
 
     # 未匹配已知宝宝 → 混合式自动建档（待确认安全网）
@@ -97,6 +101,7 @@ async def resolve_and_archive(
             baby=store.get_baby(bid),
             created=created,
             action=action,
+            parse_failed=res.parse_failed,
         )
 
     # 兜底：沿用焦点（如纯产品知识问句，无任何宝宝指向）
@@ -104,4 +109,5 @@ async def resolve_and_archive(
         focus_baby_id=focus_baby_id,
         baby=store.get_baby(focus_baby_id) if focus_baby_id else None,
         action=action,
+        parse_failed=res.parse_failed,
     )

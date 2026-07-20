@@ -44,6 +44,7 @@
 | `3f5f106` | **P1 知识转化层** | 统一多源适配接口（`KnowledgeRecord`/`IngestAdapter`/注册表）+ 真实零依赖爬虫 + 归一管线（路由/去重/容错） | harness I1–I6 绿 |
 | `64fe970` | **P1 会话约束层**（规划·方向B + 记忆·方向A） | 用户约束收敛为 `UserConstraints`：规则抽取累积(B) + 超 N 轮 LLM 摘要压缩(A)，注入 system prompt 并持久化 | harness B1–B5/A1–A3 绿 |
 | `a63d2aa` | **P2 宝宝/客户档案层** | `Customer(1→N BabyProfile)` + 每轮 LLM 实体链接(`resolve_and_extract`) + 混合式建档安全网/主动归档(`resolve_and_archive`) + 焦点宝宝注入 system | harness P1/P7/P8/P4/P5/P2/P3/P6/P9 全绿 |
+| `d9bbb23` | **P2 数据一致性加固** | pending 防污染(`find_baby_by_name`仅 confirmed + `_match_known`同名歧义不误配) / 消歧失败熔断(`parse_failed`+会话级≥3轮降级告警) / 跨会话写锁(`_baby_locks`) / `prune_stale_pending` | harness P10–P15 全绿 |
 | `a63d2aa` | **门禁提速治理** | 重型真实模型测试（`test_real_embed_bend`/`test_reranker` 的 RR3/RR4）改用 `RUN_REAL_MODEL=1` 显式开关隔离，默认门禁跳过 → 9/9 绿且 ~50s | 默认门禁 9/9 ALL GREEN，重型测试 opt-in 仍 7/7、4/4 绿 |
 
 > **全量门禁：9/9 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
@@ -56,7 +57,7 @@
 | MOD-kb | partial | 分块/嵌入/向量检索 + 独立重排器已跑通真实嵌入 |
 | MOD-agent | partial | RAG 核心 + 每企业可配置 LLM + 约束块注入已落地 |
 | MOD-session | **partial（P1 已落地）** | 三级隔离 + 用户约束累积/压缩已交付 |
-| MOD-baby-profile | **partial（P2 已落地）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入 |
+| MOD-baby-profile | **partial（P2 已落地 + 数据一致性加固）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 |
 | MOD-wechat | partial | iLink Bot API 网关 + 约束/档案接线已落地 |
 | MOD-deploy | backlog | 端侧 1 家 1 实例部署（待实现） |
 

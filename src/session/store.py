@@ -59,6 +59,10 @@ class SessionStore:
                     session_id INTEGER PRIMARY KEY,
                     baby_id INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS session_resolution_fails (
+                    session_id INTEGER PRIMARY KEY,
+                    fails INTEGER NOT NULL DEFAULT 0
+                );
                 """
             )
             conn.commit()
@@ -159,5 +163,32 @@ class SessionStore:
                 "INSERT OR REPLACE INTO session_baby_focus(session_id, baby_id) "
                 "VALUES(?, ?)",
                 (session_id, baby_id),
+            )
+            conn.commit()
+
+    # ---------- 宝宝消歧连续失败计数（熔断统计，缺陷 A）----------
+    def get_resolution_fails(self, session_id: int) -> int:
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT fails FROM session_resolution_fails WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+        return row["fails"] if row else 0
+
+    def inc_resolution_fails(self, session_id: int) -> int:
+        with connect(self.db_path) as conn:
+            cur = conn.execute(
+                "INSERT INTO session_resolution_fails(session_id, fails) VALUES(?, 1) "
+                "ON CONFLICT(session_id) DO UPDATE SET fails = fails + 1",
+                (session_id,),
+            )
+            conn.commit()
+            return cur.rowcount and self.get_resolution_fails(session_id)
+
+    def reset_resolution_fails(self, session_id: int) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE session_resolution_fails SET fails=0 WHERE session_id=?",
+                (session_id,),
             )
             conn.commit()
