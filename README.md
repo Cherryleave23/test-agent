@@ -43,8 +43,8 @@
 | `b5ca3fe` | 生产闭环真实适配器 + 独立重排器 | 6 个真实奶粉商品经 bge 真实嵌入入库；独立 cross-encoder 重排器 | 全量 7/7 绿 |
 | `3f5f106` | **P1 知识转化层** | 统一多源适配接口（`KnowledgeRecord`/`IngestAdapter`/注册表）+ 真实零依赖爬虫 + 归一管线（路由/去重/容错） | harness I1–I6 绿 |
 | `64fe970` | **P1 会话约束层**（规划·方向B + 记忆·方向A） | 用户约束收敛为 `UserConstraints`：规则抽取累积(B) + 超 N 轮 LLM 摘要压缩(A)，注入 system prompt 并持久化 | harness B1–B5/A1–A3 绿 |
-| `d2edb73` | **P2 宝宝/客户档案层** | `Customer(1→N BabyProfile)` + 每轮 LLM 实体链接(`resolve_and_extract`) + 混合式建档安全网/主动归档(`resolve_and_archive`) + 焦点宝宝注入 system | harness P1/P7/P8/P4/P5/P2/P3/P6/P9 全绿 |
-| `d2edb73` | **门禁提速治理** | 重型真实模型测试（`test_real_embed_bend`/`test_reranker` 的 RR3/RR4）改用 `RUN_REAL_MODEL=1` 显式开关隔离，默认门禁跳过 → 9/9 绿且 ~50s | 默认门禁 9/9 ALL GREEN，重型测试 opt-in 仍 7/7、4/4 绿 |
+| `a63d2aa` | **P2 宝宝/客户档案层** | `Customer(1→N BabyProfile)` + 每轮 LLM 实体链接(`resolve_and_extract`) + 混合式建档安全网/主动归档(`resolve_and_archive`) + 焦点宝宝注入 system | harness P1/P7/P8/P4/P5/P2/P3/P6/P9 全绿 |
+| `a63d2aa` | **门禁提速治理** | 重型真实模型测试（`test_real_embed_bend`/`test_reranker` 的 RR3/RR4）改用 `RUN_REAL_MODEL=1` 显式开关隔离，默认门禁跳过 → 9/9 绿且 ~50s | 默认门禁 9/9 ALL GREEN，重型测试 opt-in 仍 7/7、4/4 绿 |
 
 > **全量门禁：9/9 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
 > 设 `RUN_REAL_MODEL=1` 并加 `--timeout 600` 可显式运行（bge 语义嵌入弯曲 7/7、真实重排 4/4 均绿）。
