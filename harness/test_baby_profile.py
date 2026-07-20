@@ -261,9 +261,9 @@ async def _p3_cross_turn_archive():
     b = store.get_baby(bid)
     assert b.baby_age == "6个月" and b.stage == "1段"
 
-    # 第二轮：累积过敏原，保留上轮属性与 confirmed 状态
+    # 第二轮：累积过敏原（焦点稳定走结果缓存路径，规则抽取归档到焦点），保留上轮属性
     r2 = await resolve_and_archive(store, ArchiveProvider(), "ent1", "emp1",
-                                   "user: 壮壮6个月喝1段", "壮壮对牛奶过敏", bid)
+                                   "user: 壮壮6个月喝1段", "壮壮对牛奶蛋白过敏", bid)
     assert r2.focus_baby_id == bid
     b2 = store.get_baby(bid)
     assert b2.baby_age == "6个月"        # 保留
@@ -468,6 +468,44 @@ def _p15_concurrent_write_lock():
     assert "A" in b.allergens and "B" in b.allergens, f"并发 upsert 丢失更新：{b.allergens}"
 
 
+# ---------------------------------------------------------------------------
+# P16 焦点稳定结果缓存：跳过 LLM 消歧（规则归档）+ 提及他宝仍触发切换
+# ---------------------------------------------------------------------------
+async def _p16_focus_stable_cache():
+    store = BabyProfileStore(_tmp_db())
+    cid1 = store.get_or_create_customer("ent1", "emp1", "张姐")
+    bid1 = store.create_baby(BabyProfile(None, "ent1", "emp1", cid1, "壮壮", status="confirmed"))
+    cid2 = store.get_or_create_customer("ent1", "emp1", "李姐")
+    bid2 = store.create_baby(BabyProfile(None, "ent1", "emp1", cid2, "妞妞", status="confirmed"))
+
+    class CountProvider:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, messages, retrieved_hits=None, **kw):
+            self.calls += 1
+            cur = messages[-1]["content"].split("\nuser: ")[-1]
+            if "妞妞" in cur:
+                return json.dumps({"action": "chat", "customer": "李姐", "baby": "妞妞",
+                                   "extracted": {"baby_age": "2岁"},
+                                   "is_third_party": False, "is_hypothetical": False},
+                                  ensure_ascii=False)
+            return json.dumps({"action": "chat", "baby": "", "extracted": {},
+                               "is_third_party": False, "is_hypothetical": False},
+                              ensure_ascii=False)
+
+    p = CountProvider()
+    # 焦点稳定（只提壮壮）→ 跳过 LLM，规则抽取归档到壮壮
+    r1 = await resolve_and_archive(store, p, "ent1", "emp1", "", "壮壮对牛奶蛋白过敏", bid1)
+    assert p.calls == 0, "焦点稳定应跳过 LLM 消歧"
+    assert r1.focus_baby_id == bid1
+    assert "牛奶蛋白" in store.get_baby(bid1).allergens
+    # 提及另一已知宝宝妞妞 → 必须走 LLM 检测切换
+    r2 = await resolve_and_archive(store, p, "ent1", "emp1", "", "妞妞现在2岁换什么", bid1)
+    assert p.calls == 1, "提及其他已知宝宝应触发 LLM 消歧"
+    assert r2.focus_baby_id == bid2
+
+
 CHECKS = [
     ("P1 显式建档(客户+宝宝)", _p1_explicit_create),
     ("P7 (ent,emp) 隔离", _p7_isolation),
@@ -484,6 +522,7 @@ CHECKS = [
     ("P13 消歧失败可观测(parse_failed)", _p13_parse_failed_flag),
     ("P14 网关级连续失败熔断", _p14_circuit_breaker),
     ("P15 跨会话写锁并发upsert", _p15_concurrent_write_lock),
+    ("P16 焦点稳定结果缓存(跳LLM+切换仍检)", _p16_focus_stable_cache),
 ]
 
 

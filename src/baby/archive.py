@@ -15,7 +15,7 @@ from typing import Optional
 
 from baby.models import BabyProfile
 from baby.store import BabyProfileStore
-from baby.resolution import resolve_and_extract
+from baby.resolution import resolve_and_extract, _rule_extract, focus_is_stable
 
 
 @dataclass
@@ -37,6 +37,21 @@ async def resolve_and_archive(
     focus_baby_id: Optional[int],
 ) -> ArchiveResult:
     known = store.list_for_employee(ent, emp)
+
+    # 结果缓存（优化 B）：焦点稳定（消息未提及非焦点的已知宝宝/客户名、非第三方提及）
+    # → 跳过 LLM 实体链接，仅用规则抽取把属性归档到焦点宝宝。LLM 仅做实体链接，
+    # 属性抽取本就是规则，故质量无损，但省一次 LLM 调用。潜在切换仍走下方 LLM 路径。
+    if focus_is_stable(known, focus_baby_id, current_msg):
+        baby = store.get_baby(focus_baby_id)
+        if baby is not None:
+            extracted = _rule_extract(current_msg)
+            if extracted and not extracted.is_empty_attr():
+                store.upsert_baby_attrs(focus_baby_id, extracted)
+            return ArchiveResult(
+                focus_baby_id=focus_baby_id, baby=baby,
+                action="chat", parse_failed=False,
+            )
+
     res = await resolve_and_extract(
         history_text, current_msg, known, focus_baby_id, provider
     )

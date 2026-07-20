@@ -81,6 +81,7 @@
 | P13 | 消歧失败可观测：`parse_failed` 标志 + 兜底沿用焦点不崩 | `resolution` + `archive` | PASS |
 | P14 | 网关级连续失败熔断：≥阈值降级为仅产品问答，不再建档/归档 | `gateway` + `session_resolution_fails` | PASS |
 | P15 | 跨会话写锁：并发 upsert 同一宝宝不丢失更新 | `store._baby_locks` | PASS |
+| P16 | 焦点稳定结果缓存：跳过 LLM 消歧（规则归档）+ 提及他宝仍触发切换 | `resolution.focus_is_stable` + `archive` 缓存路径 | PASS |
 
 > 零破坏论证：`baby_block` 为可选形参、默认 `None`；网关仅在 `baby_profile_enabled` 且 `baby_store` 非 None 时接线；
 > `MockProvider` 忽略 system prompt → 注入档案块不改 Mock 回答；既有 8 套测试不受影响（默认门禁 9/9 绿）。
@@ -156,6 +157,7 @@ resolve_and_archive(store, provider, ent, emp, history_text, current_msg, focus_
 
 - **安全网（混合式 + 待确认）**：自动建档一律 `pending`，由员工后续确认/修正/合并/删除；第三人称/假设绝不落库。
 - **主动归档**：抽取到的明确属性每轮 upsert 进正确宝宝，跨多轮保留并累加（如「6个月」→ 再「对牛奶过敏」→ 两者皆留）。
+- **结果缓存（优化 B）**：`focus_is_stable` 判定焦点稳定（消息仅提焦点宝宝、无第三方提及、未提其他已知宝宝名）→ **跳过 LLM 实体链接**，仅用规则抽取把属性归档到焦点宝宝。LLM 仅做实体链接，属性抽取本就是规则，故质量无损却省一次 LLM 调用；提及任一「非焦点」已知宝宝名仍走 LLM 以检测快速切换。
 
 ---
 

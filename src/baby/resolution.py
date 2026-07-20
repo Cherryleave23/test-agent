@@ -76,6 +76,40 @@ def _has_baby_signal(text: str, known: Optional[List[dict]] = None) -> bool:
     return False
 
 
+# 第三方/假设提及：焦点稳定缓存路径需让位给 LLM 判定（安全网不可绕过）
+_THIRD_PARTY_HINTS = re.compile(r"同事|别人|他人|网上|网红|朋友家|隔壁", re.IGNORECASE)
+
+
+def focus_is_stable(known: List[dict], focus_baby_id: Optional[int],
+                    current_msg: str) -> bool:
+    """结果缓存判据：焦点是否稳定到可跳过 LLM 实体链接。
+
+    返回 True 当且仅当：已有焦点宝宝；且当前消息未提及任何「非焦点」的已知宝宝/客户名
+    （否则可能是快速切换）；且不含第三方/假设提及（应交 LLM 判定 is_third_party）。
+
+    稳定时调用方可用规则抽取直接归档到焦点宝宝，省去一次 LLM 调用——
+    属性抽取本就是规则（LLM 仅做实体链接），质量无损。
+    """
+    if focus_baby_id is None:
+        return False
+    if _THIRD_PARTY_HINTS.search(current_msg or ""):
+        return False
+    focus_names = set()
+    for it in known:
+        if it.get("baby_id") == focus_baby_id:
+            focus_names.add(_norm(it.get("baby_name", "")))
+            focus_names.add(_norm(it.get("customer_name", "")))
+    msg_n = _norm(current_msg)
+    for it in known:
+        nb = _norm(it.get("baby_name", ""))
+        nc = _norm(it.get("customer_name", ""))
+        if nb and nb not in focus_names and nb in msg_n:
+            return False
+        if nc and nc not in focus_names and nc in msg_n:
+            return False
+    return True
+
+
 def _rule_extract(text: str) -> BabyProfile:
     """规则抽取（复用 UserConstraints 词表），返回仅含属性的 BabyProfile 壳。"""
     c = extract_constraints(text or "")
