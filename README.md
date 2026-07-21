@@ -55,8 +55,9 @@
 | `fix(baby)` | **P0 修复：focus_is_stable 新宝宝名检测** | 从零建档场景下 `focus_is_stable` 不检测新宝宝名导致新宝宝不被建档 + 串档；修复：消息含宝宝信号但不含焦点宝宝名时返回 False 交 LLM 建档 | 终极实战 6/6 + 全量 14/14 全绿 |
 | `fix(baby)` | **P1 修复：4 项档案能力缺陷（D1-D4）** | D1 `_rule_extract` 支持结构化字段抽取（birth_date/gestational_weeks/medical_history/feeding_history）+ D2 客户名后续补充（创建独立 customer 记录避免共享串档）+ D3 信息丰度自动确认（pending 累积≥3属性转 confirmed）+ D4 focus_is_stable 代词指代优化 + `_match_known` 退化匹配区分未命名客户 | 终极实战 6/6 + 全量 14/14 全绿 |
 | `fix(agent)` | **P0+P1 修复：消息流程装配断裂（A1-A6）** | A1 `build_instance` 装配 `BabyProfileStore`（端侧 baby-profile 不再失效）+ A2 网关传 `baby_profile` 使检索查询融合生效 + A3 约束压缩合并而非替换（不丢旧约束）+ A4 焦点切换刷新约束（消旧宝宝残留）+ A5 约束从档案派生（消双源冲突）+ A6 LLM 指数退避重试（网络抖动容错） | 装配 5/5 + 全量 15/15 全绿 |
+| `fix(baby)` | **P0 修复：跨上下文污染防护（C1+C2）** | C1 `focus_is_stable` 无宝宝信号时返回 False（原 return True 导致成人检验报告/用户自身症状被归档到焦点宝宝）+ `resolve_and_extract` 无信号时不抽取属性（返回空 extracted）+ C2 `_validate_extracted` 合理性校验兜底（baby_age>6岁拒绝、birth_date 未来/太久以前拒绝）+ `_BABY_SIGNALS` 补充 `\d\s*段` | 污染防护 5/5 + 全量 16/16 全绿 |
 
-> **全量门禁：15/15 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
+> **全量门禁：16/16 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
 > 设 `RUN_REAL_MODEL=1` 并加 `--timeout 600` 可显式运行（bge 语义嵌入弯曲 7/7、真实重排 4/4 均绿）。
 
 ### 模块实现状态

@@ -55,7 +55,7 @@ _KNOWN_HEADER = "\n\n已知该员工的客户与宝宝清单（JSON 数组）：
 
 # 无宝宝相关信号时的短路启发式（避免每轮都调 LLM）
 _BABY_SIGNALS = re.compile(
-    r"宝宝|宝贝|娃|婴儿|幼儿|月龄|个月|段位|段奶|奶粉|过敏|客户|顾客|张姐|李姐|"
+    r"宝宝|宝贝|娃|婴儿|幼儿|月龄|个月|段位|段奶|\d\s*段|奶粉|过敏|客户|顾客|张姐|李姐|"
     r"他家|她家|咱们|咱家|你家的|我家|小朋友|小孩",
     re.IGNORECASE,
 )
@@ -90,6 +90,10 @@ def focus_is_stable(known: List[dict], focus_baby_id: Optional[int],
     （否则可能是快速切换）；且不含第三方/假设提及（应交 LLM 判定 is_third_party）；
     且消息含宝宝信号时必须提及焦点宝宝/客户名（否则可能是新宝宝，交 LLM 建档）。
 
+    C1 修复：无宝宝信号时返回 False（而非 True）。原逻辑无信号→True 导致跨上下文污染
+    （成人检验报告、用户自己的症状等被归档到焦点宝宝）。新逻辑：无信号→可能不是关于
+    宝宝的，交 LLM 判断归属。仅明确提及焦点宝宝名或代词指代时才规则短路。
+
     稳定时调用方可用规则抽取直接归档到焦点宝宝，省去一次 LLM 调用——
     属性抽取本就是规则（LLM 仅做实体链接），质量无损。
     """
@@ -115,9 +119,6 @@ def focus_is_stable(known: List[dict], focus_baby_id: Optional[int],
             return False
         if nc and nc not in focus_names and nc in msg_n:
             return False
-    # 新增：消息含宝宝信号但不含焦点宝宝名/客户名 → 可能是新宝宝，交 LLM 建档
-    # （缺陷修复：原逻辑只检测 known 中已有的非焦点名，不检测新宝宝名，
-    #   导致从零建档场景下新宝宝信息被错误归到焦点宝宝）
     if _BABY_SIGNALS.search(current_msg or ""):
         if not any(fn in msg_n for fn in focus_names):
             # D4 修复：消息含代词指代信号且不含任何已知宝宝名 → 代词指代焦点，规则短路
@@ -126,7 +127,11 @@ def focus_is_stable(known: List[dict], focus_baby_id: Optional[int],
                 # 再次确认不含 known 中其他宝宝名（快速切换检测已在上方完成）
                 return True
             return False  # 无代词 → 可能新宝宝，交 LLM
-    return True
+        # 含宝宝信号且提及焦点名 → 稳定
+        return True
+    # C1 修复：无宝宝信号 → 可能不是关于宝宝的（成人报告/用户自己症状/闲聊），
+    # 交 LLM 判断归属（原逻辑 return True 导致跨上下文污染）
+    return False
 
 
 # 结构化字段规则抽取词表（D1 修复：_rule_extract 支持 v2 字段）
@@ -226,6 +231,43 @@ def _extract_feeding_history(text: str) -> List[str]:
     return result
 
 
+# C2 修复：规则抽取合理性校验阈值
+_MAX_BABY_AGE_YEARS = 6  # 宝宝年龄上限（>6岁不太可能是宝宝）
+
+
+def _validate_extracted(extracted: BabyProfile) -> BabyProfile:
+    """C2 修复：对规则抽取结果做合理性校验，拒绝荒谬数据（兜底防线）。
+
+    规则短路路径（focus_is_stable=True）已通过焦点宝宝名/代词指代确认归属，
+    但 LLM 偶尔可能失误，或消息中混入非宝宝数据（如成人报告转发给焦点宝宝）。
+    此函数作为最后一道防线，拒绝明显不合理的数据，防止档案污染。
+
+    校验规则：
+    - baby_age：>6岁拒绝（宝宝年龄上限）
+    - birth_date：未来日期拒绝；超过6年前的日期拒绝（不是宝宝）
+    """
+    # baby_age 合理性
+    if extracted.baby_age:
+        m = re.match(r"(\d+)\s*岁", extracted.baby_age)
+        if m and int(m.group(1)) > _MAX_BABY_AGE_YEARS:
+            extracted.baby_age = ""
+    # birth_date 合理性
+    if extracted.birth_date:
+        from datetime import datetime, timedelta
+        try:
+            bd = datetime.strptime(extracted.birth_date, "%Y-%m-%d")
+            now = datetime.now()
+            if bd > now + timedelta(days=1):
+                # 出生日期在未来 → 不合理（如采血日期、报告日期）
+                extracted.birth_date = ""
+            elif bd < now - timedelta(days=365 * _MAX_BABY_AGE_YEARS):
+                # 出生超过6年前 → 不太可能是当前管理的宝宝
+                extracted.birth_date = ""
+        except ValueError:
+            extracted.birth_date = ""
+    return extracted
+
+
 def _rule_extract(text: str) -> BabyProfile:
     """规则抽取（复用 UserConstraints 词表 + v2 结构化字段），返回仅含属性的 BabyProfile 壳。
 
@@ -238,7 +280,7 @@ def _rule_extract(text: str) -> BabyProfile:
     gestational_weeks = _extract_gestational_weeks(text)
     medical_history = _extract_medical_history(text)
     feeding_history = _extract_feeding_history(text)
-    return BabyProfile(
+    return _validate_extracted(BabyProfile(
         baby_id=None, enterprise_id="", employee_id="", customer_id=0,
         name="", baby_age=c.baby_age, stage=c.stage,
         allergens=list(c.allergens), budget=c.budget,
@@ -248,7 +290,7 @@ def _rule_extract(text: str) -> BabyProfile:
         gestational_weeks=gestational_weeks,
         medical_history=medical_history,
         feeding_history=feeding_history,
-    )
+    ))
 
 
 def _norm(s: str) -> str:
@@ -366,9 +408,17 @@ async def resolve_and_extract(
     input token 费用；切换焦点宝宝不破坏缓存（焦点在断点之后）。
     """
     if not _has_baby_signal(current_msg, known):
+        # C1 修复：无宝宝信号时不抽取属性（防止跨上下文污染）。
+        # 消息可能不是关于宝宝的（如成人检验报告、用户自己的症状），
+        # 规则抽取会将成人数据误抽取为宝宝属性（如"52岁"→baby_age、
+        # 采血日期→birth_date、"贫血"→medical_history）。
+        # 返回空 extracted → 不归档，仅沿用焦点供回答层使用。
         return ResolutionResult(
             action="chat", baby_id=focus_baby_id,
-            extracted=_rule_extract(current_msg),
+            extracted=BabyProfile(
+                baby_id=None, enterprise_id="", employee_id="",
+                customer_id=0, name="",
+            ),
         )
     known_json = json.dumps(known, ensure_ascii=False)
     # 稳定前缀：指令 + 已知清单（同员工跨轮一致，缓存命中率高）
