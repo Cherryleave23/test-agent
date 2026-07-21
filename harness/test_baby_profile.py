@@ -173,7 +173,7 @@ async def _p5_pronoun():
     assert r.baby_id == bid1, f"代词应解析到焦点宝宝({bid1})，实际 {r.baby_id}"
     assert r.extracted.stage == "2段"
 
-    # 短路：无宝宝信号不调 LLM
+    # D1 修复后：每轮都走 LLM（取消规则短路），无宝宝信号也调 LLM
     class SpyProvider:
         def __init__(self):
             self.calls = 0
@@ -184,7 +184,7 @@ async def _p5_pronoun():
 
     spy = SpyProvider()
     r0 = await resolve_and_extract("user: 壮壮6个月", "今天天气不错", known, bid1, spy)
-    assert spy.calls == 0, "无宝宝信号应短路不调 LLM"
+    assert spy.calls == 1, "D1 修复后每轮都走 LLM（无信号也调 LLM 判断归属）"
     assert r0.action == "chat" and r0.baby_id == bid1
 
 
@@ -474,7 +474,7 @@ def _p15_concurrent_write_lock():
 
 
 # ---------------------------------------------------------------------------
-# P16 焦点稳定结果缓存：跳过 LLM 消歧（规则归档）+ 提及他宝仍触发切换
+# P16 焦点稳定结果缓存（D1 修复后：每轮走 LLM，LLM 负责归属+抽取）
 # ---------------------------------------------------------------------------
 async def _p16_focus_stable_cache():
     store = BabyProfileStore(_tmp_db())
@@ -495,19 +495,24 @@ async def _p16_focus_stable_cache():
                                    "extracted": {"baby_age": "2岁"},
                                    "is_third_party": False, "is_hypothetical": False},
                                   ensure_ascii=False)
+            if "壮壮" in cur:
+                return json.dumps({"action": "chat", "customer": "张姐", "baby": "壮壮",
+                                   "extracted": {"allergens": ["牛奶蛋白"]},
+                                   "is_third_party": False, "is_hypothetical": False},
+                                  ensure_ascii=False)
             return json.dumps({"action": "chat", "baby": "", "extracted": {},
                                "is_third_party": False, "is_hypothetical": False},
                               ensure_ascii=False)
 
     p = CountProvider()
-    # 焦点稳定（只提壮壮）→ 跳过 LLM，规则抽取归档到壮壮
+    # D1 修复后：每轮都走 LLM（LLM 负责归属判断 + 属性抽取）
     r1 = await resolve_and_archive(store, p, "ent1", "emp1", "", "壮壮对牛奶蛋白过敏", bid1)
-    assert p.calls == 0, "焦点稳定应跳过 LLM 消歧"
+    assert p.calls == 1, "每轮都应走 LLM（D1 修复后取消规则短路）"
     assert r1.focus_baby_id == bid1
     assert "牛奶蛋白" in store.get_baby(bid1).allergens
-    # 提及另一已知宝宝妞妞 → 必须走 LLM 检测切换
+    # 提及另一已知宝宝妞妞 → LLM 检测切换
     r2 = await resolve_and_archive(store, p, "ent1", "emp1", "", "妞妞现在2岁换什么", bid1)
-    assert p.calls == 1, "提及其他已知宝宝应触发 LLM 消歧"
+    assert p.calls == 2, "第二轮也应走 LLM"
     assert r2.focus_baby_id == bid2
 
 
@@ -729,7 +734,7 @@ CHECKS = [
     ("P7 (ent,emp) 隔离", _p7_isolation),
     ("P8 持久化全链路(upsert/confirm/merge/delete)", _p8_roundtrip),
     ("P4 快速切换意图消歧", _p4_switching),
-    ("P5 代词指代 + 短路不调LLM", _p5_pronoun),
+    ("P5 代词指代 + 每轮走LLM", _p5_pronoun),
     ("P2 混合式建档安全网(自动建档+第三方不建)", _p2_autocreate_safety),
     ("P3 主动归档跨轮累积", _p3_cross_turn_archive),
     ("P6 焦点宝宝档案块注入system", _p6_baby_block_injection),
@@ -740,7 +745,7 @@ CHECKS = [
     ("P13 消歧失败可观测(parse_failed)", _p13_parse_failed_flag),
     ("P14 网关级连续失败熔断", _p14_circuit_breaker),
     ("P15 跨会话写锁并发upsert", _p15_concurrent_write_lock),
-    ("P16 焦点稳定结果缓存(跳LLM+切换仍检)", _p16_focus_stable_cache),
+    ("P16 每轮走LLM(归属+抽取)", _p16_focus_stable_cache),
     ("P17 Prompt Caching(稳定前缀命中契约+cache_control断点)", _p17_prompt_caching),
     ("P18 消歧prompt结构(system=指令+known,byte-for-byte可缓存)", _p18_prompt_structure),
     ("P19 序列化稳定(同known两次json一致+顺序即缓存键)", _p19_serialization_stable),

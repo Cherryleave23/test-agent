@@ -72,6 +72,19 @@ class DummyProvider:
         return "{}"
 
 
+class LLMProvider:
+    """模拟 LLM 返回正确 extracted（D1 修复后每轮走 LLM）。"""
+    async def complete(self, messages, **kw):
+        import json
+        cur = messages[-1]["content"].split("\nuser: ")[-1]
+        if "小宝" in cur and "6个月" in cur:
+            return json.dumps({"action": "chat", "customer": "王芳", "baby": "小宝",
+                               "extracted": {"baby_age": "6个月"},
+                               "is_third_party": False, "is_hypothetical": False},
+                              ensure_ascii=False)
+        return "{}"
+
+
 # ---------------------------------------------------------------------------
 # X1 成人检验报告（52岁）不污染焦点宝宝档案
 # ---------------------------------------------------------------------------
@@ -205,20 +218,20 @@ async def _x5_normal_baby_message_still_works():
     bid = _setup_focus_baby(store)
     known = store.list_for_employee("ent1", "emp1")
 
-    # 提及焦点宝宝名 + 宝宝信号 → focus_is_stable=True → 规则短路归档
+    # 提及焦点宝宝名 + 宝宝信号 → 走 LLM（D1 修复后每轮走 LLM）
     msg = "小宝最近开始吃辅食了，6个月"
     stable = focus_is_stable(known, bid, msg)
-    assert stable is True, \
-        f"X5: 提及焦点宝宝名应稳定，实际 {stable}"
+    # focus_is_stable 保留用于诊断，不再被生产路径调用
+    # stable 可能是 True（提及焦点名），但 resolve_and_archive 仍走 LLM
 
     arch = await resolve_and_archive(
-        store, DummyProvider(), "ent1", "emp1", "", msg, bid
+        store, LLMProvider(), "ent1", "emp1", "", msg, bid
     )
 
     baby = store.get_baby(bid)
-    # "6个月" 应被抽取并覆写（规则短路路径，已确认归属）
+    # LLM 返回 baby_age="6个月" → 归档
     assert baby.baby_age == "6个月", \
-        f"X5: 正常消息应归档 baby_age='6个月'，实际 '{baby.baby_age}'"
+        f"X5: LLM 抽取应归档 baby_age='6个月'，实际 '{baby.baby_age}'"
 
 
 CHECKS = [

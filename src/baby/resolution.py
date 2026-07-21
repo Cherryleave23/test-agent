@@ -86,16 +86,13 @@ def focus_is_stable(known: List[dict], focus_baby_id: Optional[int],
                     current_msg: str) -> bool:
     """结果缓存判据：焦点是否稳定到可跳过 LLM 实体链接。
 
-    返回 True 当且仅当：已有焦点宝宝；且当前消息未提及任何「非焦点」的已知宝宝/客户名
-    （否则可能是快速切换）；且不含第三方/假设提及（应交 LLM 判定 is_third_party）；
-    且消息含宝宝信号时必须提及焦点宝宝/客户名（否则可能是新宝宝，交 LLM 建档）。
+    **D1 修复后此函数不再被生产路径 `resolve_and_archive` 调用**。
+    每轮都走 LLM 路径（LLM 既判归属又抽属性），因为规则抽取无法处理：
+    - 相对时间（"1年前3岁"→规则只抓到"3岁"）
+    - 开放词汇（"肚子疼"/"冰淇淋"不在词表里）
+    - 隐含推算（"1年前3岁"→可推算 birth_date）
 
-    C1 修复：无宝宝信号时返回 False（而非 True）。原逻辑无信号→True 导致跨上下文污染
-    （成人检验报告、用户自己的症状等被归档到焦点宝宝）。新逻辑：无信号→可能不是关于
-    宝宝的，交 LLM 判断归属。仅明确提及焦点宝宝名或代词指代时才规则短路。
-
-    稳定时调用方可用规则抽取直接归档到焦点宝宝，省去一次 LLM 调用——
-    属性抽取本就是规则（LLM 仅做实体链接），质量无损。
+    此函数保留用于测试/诊断/未来可能的优化（如 Mock 模式下省 LLM 调用）。
     """
     if focus_baby_id is None:
         return False
@@ -353,8 +350,9 @@ def _parse_resolution(raw: str, known: List[dict], focus_baby_id: Optional[int])
 
     customer = d.get("customer") or ""
     baby = d.get("baby") or ""
+    action = d.get("action") or "chat"  # 空 JSON 默认 chat
     cid, bid = _match_known(known, customer, baby)
-    if bid is None and d.get("action") in ("chat", "confirm", "merge", "delete"):
+    if bid is None and action in ("chat", "confirm", "merge", "delete"):
         # 聊已建档宝宝但没匹配到 -> 用焦点兜底
         bid = focus_baby_id
     ext_d = d.get("extracted") or {}
@@ -399,27 +397,17 @@ async def resolve_and_extract(
 ) -> ResolutionResult:
     """每轮消歧 + 抽取。
 
-    - 无宝宝信号 → 短路，沿用焦点，规则抽取（省一次 LLM）。
-    - 否则一次 LLM 调用，解析为 ResolutionResult；失败兜底。
+    D1 修复后：每轮都走 LLM（取消规则短路），LLM 既判归属又抽属性。
+    无宝宝信号的消息也交 LLM——LLM 通过会话上下文判断归属（如"现在肚子疼"
+    在会话上下文中显然是焦点宝宝的），并通过 is_third_party 拒绝成人报告。
+
+    C2 合理性校验作为兜底防线（_rule_extract 中调用），防止 LLM 偶尔失误。
 
     Prompt Caching：稳定前缀（指令 + 已知清单 `known`）作为首条 system 消息，
     每轮变量（`focus` + 历史 + 当前句）置于其后并开启 `cache_control`——
     同员工会话中前缀高度稳定（仅新增宝宝时变化），provider 复用前缀可显著降低
     input token 费用；切换焦点宝宝不破坏缓存（焦点在断点之后）。
     """
-    if not _has_baby_signal(current_msg, known):
-        # C1 修复：无宝宝信号时不抽取属性（防止跨上下文污染）。
-        # 消息可能不是关于宝宝的（如成人检验报告、用户自己的症状），
-        # 规则抽取会将成人数据误抽取为宝宝属性（如"52岁"→baby_age、
-        # 采血日期→birth_date、"贫血"→medical_history）。
-        # 返回空 extracted → 不归档，仅沿用焦点供回答层使用。
-        return ResolutionResult(
-            action="chat", baby_id=focus_baby_id,
-            extracted=BabyProfile(
-                baby_id=None, enterprise_id="", employee_id="",
-                customer_id=0, name="",
-            ),
-        )
     known_json = json.dumps(known, ensure_ascii=False)
     # 稳定前缀：指令 + 已知清单（同员工跨轮一致，缓存命中率高）
     stable_prefix = _SYSTEM_INSTRUCTION + _KNOWN_HEADER + known_json

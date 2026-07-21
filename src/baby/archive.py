@@ -15,7 +15,7 @@ from typing import Optional
 
 from baby.models import BabyProfile
 from baby.store import BabyProfileStore
-from baby.resolution import resolve_and_extract, _rule_extract, focus_is_stable
+from baby.resolution import resolve_and_extract
 
 
 _UNNAMED_CUSTOMER = "（未命名客户）"
@@ -75,20 +75,13 @@ async def resolve_and_archive(
 ) -> ArchiveResult:
     known = store.list_for_employee(ent, emp)
 
-    # 结果缓存（优化 B）：焦点稳定（消息未提及非焦点的已知宝宝/客户名、非第三方提及）
-    # → 跳过 LLM 实体链接，仅用规则抽取把属性归档到焦点宝宝。LLM 仅做实体链接，
-    # 属性抽取本就是规则，故质量无损，但省一次 LLM 调用。潜在切换仍走下方 LLM 路径。
-    if focus_is_stable(known, focus_baby_id, current_msg):
-        baby = store.get_baby(focus_baby_id)
-        if baby is not None:
-            extracted = _rule_extract(current_msg)
-            if extracted and not extracted.is_empty_attr():
-                store.upsert_baby_attrs(focus_baby_id, extracted)
-            return ArchiveResult(
-                focus_baby_id=focus_baby_id, baby=baby,
-                action="chat", parse_failed=False,
-            )
-
+    # D1 修复：取消 focus_is_stable 规则短路归档，每轮都走 LLM 路径。
+    # 原逻辑：焦点稳定时跳过 LLM，用规则抽取归档（省一次 LLM 调用）。
+    # 问题：规则抽取无法处理相对时间（"1年前3岁"→只抓到"3岁"）、开放词汇
+    #       （"肚子疼"/"冰淇淋"不在词表里）、隐含推算（"1年前3岁"→可推算 birth_date）。
+    # 新逻辑：每轮都走 LLM——LLM 既判归属又抽属性，能理解时序和开放词汇。
+    # 规则抽取仅作为 LLM 解析失败时的兜底（见 _parse_resolution）。
+    # 无宝宝信号的消息由 resolve_and_extract 入口预过滤拦截（C1 污染防护）。
     res = await resolve_and_extract(
         history_text, current_msg, known, focus_baby_id, provider
     )
