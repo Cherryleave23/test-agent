@@ -10,6 +10,7 @@ from session.store import SessionStore
 from agent.pipeline import Agent
 from wechat.ilink_client import ILinkClient
 from wechat.gateway import WechatGateway
+from baby.store import BabyProfileStore
 from ingest.protocol import SeedAdapter
 from kb.models import MilkProduct, NutritionProduct
 
@@ -18,9 +19,13 @@ def build_instance(cfg: EnterpriseConfig):
     store = KnowledgeStore(cfg.db_path, embedding_kind=cfg.embedding.kind,
                            rerank_kind=cfg.rerank.kind)
     session = SessionStore(cfg.db_path)
+    # A1 修复：装配 BabyProfileStore 并传给 WechatGateway
+    # 原缺陷：build_instance 未创建 baby_store，导致 gateway.baby_store 永远 None，
+    #         整个 MOD-baby-profile 在端侧运行时完全失效（无建档/归档/消歧/注入）。
+    baby_store = BabyProfileStore(cfg.baby_db_path or cfg.db_path)
     agent = Agent(cfg, store)
     client = ILinkClient(cfg.wechat)
-    gateway = WechatGateway(cfg, session, agent, client)
+    gateway = WechatGateway(cfg, session, agent, client, baby_store=baby_store)
     return store, session, agent, client, gateway
 
 

@@ -62,10 +62,16 @@ class WechatGateway:
             early_text = "\n".join(f"{h['role']}: {h['content']}" for h in history)
             if should_compress(len(history)):
                 # 方向 A：把早期对话（含本轮）压成结构化约束，限制有效信息量（非轮数）
-                compressed = await summarize_to_constraints(
-                    early_text + f"\nuser: {msg.content}", self.agent.provider
+                # A3 修复：把已存储约束纳入压缩输入，且合并而非替换（避免多次压缩累积丢信息）
+                prior = stored.to_prompt_block() if not stored.is_empty() else ""
+                compress_input = (
+                    (f"已确认约束：\n{prior}\n\n" if prior else "")
+                    + early_text + f"\nuser: {msg.content}"
                 )
-                stored = compressed
+                compressed = await summarize_to_constraints(
+                    compress_input, self.agent.provider
+                )
+                stored = stored.merge(compressed)
             else:
                 # 方向 B：规则抽取本轮约束并累积进既有状态（确定性、无 LLM）
                 stored = stored.merge(extract_constraints(msg.content))
@@ -73,6 +79,7 @@ class WechatGateway:
 
             # ---- MOD-baby-profile：每轮消歧 + 建档安全网 + 主动归档 + 设焦点 ----
             baby_block = None
+            baby_profile_obj = None  # A2 修复：传给 agent.answer 用于检索查询融合
             if self.cfg.baby_profile_enabled and self.baby_store is not None:
                 focus_before = self.session.get_focus_baby(sid)
                 fails = self.session.get_resolution_fails(sid)
@@ -85,6 +92,7 @@ class WechatGateway:
                     if focus_before is not None:
                         b = self.baby_store.get_baby(focus_before)
                         if b is not None:
+                            baby_profile_obj = b
                             cust = self.baby_store.get_customer(b.customer_id)
                             baby_block = b.to_prompt_block(
                                 customer_name=cust.name if cust else ""
@@ -101,13 +109,29 @@ class WechatGateway:
                         self.session.reset_resolution_fails(sid)
                     self.session.set_focus_baby(sid, arch.focus_baby_id)
                     if arch.baby is not None:
+                        baby_profile_obj = arch.baby
                         cust = self.baby_store.get_customer(arch.baby.customer_id)
                         baby_block = arch.baby.to_prompt_block(
                             customer_name=cust.name if cust else ""
                         )
+                    # A4+A5 修复：焦点切换时用新焦点档案刷新约束中的宝宝级字段
+                    # （消除旧宝宝约束残留 + 约束与档案双源冲突）
+                    if arch.focus_baby_id != focus_before and arch.baby is not None:
+                        stored = UserConstraints(
+                            baby_age=arch.baby.baby_age,
+                            stage=arch.baby.stage,
+                            allergens=list(arch.baby.allergens),
+                            budget=arch.baby.budget,
+                            brand_preference=list(arch.baby.brand_preference),
+                            category=arch.baby.category,
+                            notes=stored.notes,  # 自由文本保留
+                        )
+                        self.session.save_constraints(sid, stored)
 
+            # A2 修复：传 baby_profile 给 agent.answer，使 _enrich_query 检索查询融合生效
             ans = await self.agent.answer(
-                msg.content, history, constraints=stored, baby_block=baby_block
+                msg.content, history, constraints=stored, baby_block=baby_block,
+                baby_profile=baby_profile_obj,
             )
             self.session.append_turn(sid, "user", msg.content, msg.message_id)
             self.session.append_turn(sid, "assistant", ans.text)

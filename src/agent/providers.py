@@ -12,6 +12,7 @@ Anthropic 端点需显式 ``cache_control`` 断点（见 :func:`_apply_cache_con
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
@@ -19,6 +20,45 @@ from typing import List, Dict, Optional
 from common.config import LLMConfig
 
 logger = logging.getLogger(__name__)
+
+
+# A6 修复：LLM 调用指数退避重试
+LLM_MAX_RETRIES = 3
+LLM_BASE_DELAY = 1.0
+
+
+async def _complete_with_retry(coro_factory, max_retries: int = LLM_MAX_RETRIES,
+                               base_delay: float = LLM_BASE_DELAY):
+    """LLM 调用指数退避重试（A6）。
+
+    对网络/超时/5xx/429 错误重试，对 4xx 客户端错误（除 429）不重试。
+    重试间隔：base_delay * 2^attempt（1s, 2s, 4s）。
+    """
+    import httpx  # type: ignore
+
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            return await coro_factory()
+        except httpx.HTTPStatusError as e:
+            last_exc = e
+            # 4xx 客户端错误（除 429 Too Many Requests 外）不重试
+            status = e.response.status_code
+            if 400 <= status < 500 and status != 429:
+                raise
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning("LLM 调用 HTTP %d，%ss 后重试 (%d/%d)",
+                               status, delay, attempt + 1, max_retries - 1)
+                await asyncio.sleep(delay)
+        except (httpx.TimeoutException, httpx.TransportError) as e:
+            last_exc = e
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning("LLM 调用网络异常 %s，%ss 后重试 (%d/%d)",
+                               type(e).__name__, delay, attempt + 1, max_retries - 1)
+                await asyncio.sleep(delay)
+    raise last_exc
 
 
 def _apply_cache_control(messages: List[Dict], cfg: LLMConfig) -> List[Dict]:
@@ -134,16 +174,20 @@ class OllamaProvider(LLMProvider):
 
         # ollama /api/chat 默认 stream=true 返回 NDJSON，r.json() 会解析失败；
         # 必须显式 stream:false 才返回单条 JSON {"message": {"content": ...}}。
-        async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(
-                f"{self.base}/api/chat",
-                json={"model": self.cfg.model, "messages": messages,
-                      "options": {"temperature": self.cfg.temperature},
-                      "stream": False},
-            )
-            r.raise_for_status()
-            data = r.json()
-            return data.get("message", {}).get("content", "")
+        # A6 修复：包裹在 _complete_with_retry 中，网络抖动时指数退避重试。
+        async def _do_request():
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.post(
+                    f"{self.base}/api/chat",
+                    json={"model": self.cfg.model, "messages": messages,
+                          "options": {"temperature": self.cfg.temperature},
+                          "stream": False},
+                )
+                r.raise_for_status()
+                data = r.json()
+                return data.get("message", {}).get("content", "")
+
+        return await _complete_with_retry(_do_request)
 
 
 class CloudProvider(LLMProvider):
@@ -161,19 +205,24 @@ class CloudProvider(LLMProvider):
             messages = _apply_cache_control(messages, self.cfg)
 
         headers = {"Authorization": f"Bearer {self.cfg.api_key or ''}"}
-        async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(
-                f"{self.base}/chat/completions",
-                headers=headers,
-                json={"model": self.cfg.model, "messages": messages,
-                      "temperature": self.cfg.temperature,
-                      "max_tokens": self.cfg.max_tokens},
-            )
-            r.raise_for_status()
-            data = r.json()
-            # Prompt Caching 可观测性：解析 usage 记录缓存命中（DeepSeek/OpenAI 均返回）
-            _report_cache_hit(data.get("usage", {}) or {})
-            return data["choices"][0]["message"]["content"]
+
+        # A6 修复：包裹在 _complete_with_retry 中，网络抖动/5xx/429 时指数退避重试。
+        async def _do_request():
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.post(
+                    f"{self.base}/chat/completions",
+                    headers=headers,
+                    json={"model": self.cfg.model, "messages": messages,
+                          "temperature": self.cfg.temperature,
+                          "max_tokens": self.cfg.max_tokens},
+                )
+                r.raise_for_status()
+                data = r.json()
+                # Prompt Caching 可观测性：解析 usage 记录缓存命中（DeepSeek/OpenAI 均返回）
+                _report_cache_hit(data.get("usage", {}) or {})
+                return data["choices"][0]["message"]["content"]
+
+        return await _complete_with_retry(_do_request)
 
 
 class ProviderFactory:

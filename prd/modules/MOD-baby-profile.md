@@ -253,3 +253,27 @@ resolve_and_archive(store, provider, ent, emp, history_text, current_msg, focus_
 - 焦点宝宝是「代词/快速切换」消歧锚点，需每轮正确更新；员工显式切到新宝宝时即重置焦点。
 - 档案块注入仅作「优先满足」提示，与知识库冲突时以知识库事实为准（块内已声明）。
 - 复用 `MilkProduct` 词表，保证抽取/注入与既有 `UserConstraints` 语义一致，避免双套口径。
+
+---
+
+## 七、已知缺陷登记（P2/P3，待后续迭代，暂不修改）
+
+> 来源：D1-D4 P1 修复后的能力评估（2026-07-22）。以下缺陷不影响建档正确性、不导致串档、不造成数据丢失，
+> 列入待办，按优先级后续迭代处理。P0/P1 缺陷已全部修复（终极实战 6/6 + 全量 14/14 ALL GREEN）。
+
+### P2 级缺陷
+
+| 编号 | 缺陷 | 描述 | 影响 | 建议修复方向 |
+|------|------|------|------|-------------|
+| B1 | feeding_history 语义序列格式 | `_extract_feeding_history` 按关键词词表拆分为独立条目（如 `['吐奶','喷射性吐奶','混合喂养','纯奶粉']`），未构造语义转换序列（如 `'混合喂养→纯奶粉'`） | 内容完整，仅格式不理想，不影响建档正确性；注入 prompt 时可读性略降 | 增加序列构造逻辑：检测"后来→现在"等转换词时拼接为 `A→B` 序列 |
+| B2 | medical_history 抽取顺序 | `_extract_medical_history` 按词表定义顺序输出，非对话中出现顺序 | 内容完全一致，仅顺序不同；不影响语义 | 改为按文本中出现位置排序（`re.finditer` 记录 offset） |
+| B3 | 合并来源审计标识 | `merge_baby` 合并后删除源档案，无来源痕迹 | 不影响功能，仅审计追溯困难；合并后无法回溯被合并的源宝宝 | 新增 `merge_log` 表记录 `(target_id, source_id, source_name, ts)` |
+| B4 | baby_age 不随 birth_date 自动刷新 | 有 `birth_date` 结构化字段时，`baby_age` 字符串不会随时间自动更新 | `birth_date` 已是结构化主字段，`baby_age` 仅作辅助；`to_prompt_block` 优先展示 `birth_date` | 注入 prompt 时由 `birth_date` 实时计算月龄覆写 `baby_age` |
+| B5 | 消歧置信度评分 | `resolve_and_extract` 无置信度评分机制，仅 `parse_failed` 二态 | 已有 parse_failed 熔断兜底；置信度可辅助更细粒度的降级策略 | LLM 输出增加 `confidence` 字段，低于阈值时提示员工确认 |
+
+### P3 级缺陷（deferred，需外部输入）
+
+| 编号 | 缺陷 | 描述 | 推迟原因 |
+|------|------|------|----------|
+| B6 | system prompt 矫正月龄指令 | 检测 `gestational_weeks < 37` 时追加矫正月龄评估指令（Deferred#5） | 需医学顾问审核指令措辞 |
+| B7 | 早产专项安全门 | 早产儿辅食添加专项告警（Deferred#6） | 需医学审核告警措辞 |
