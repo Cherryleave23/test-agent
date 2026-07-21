@@ -22,7 +22,7 @@ session_ctx(user_msg, history, enterprise_id)
    ├─5─ 映射 citations ← RetrievalHit
    └─6─ Answer{text, citations, model, provider} ──▶ 写回 session history
 ```
-> * 当且仅当问题/命中含母婴健康关键词时，尾部追加「非医疗诊断，严重时请就医」模板（可配置）。
+> * 回答尾部**始终追加**「非医疗诊断」免责模板（含母婴健康提示），**无条件触发**（见 §四；与 `src/agent/pipeline.py` 实际行为一致）。
 
 ---
 
@@ -30,7 +30,7 @@ session_ctx(user_msg, history, enterprise_id)
 - `EnterprisePrompt` = 基础系统提示 + 企业产品结构/语气/政策 + 知识范围声明。
 - **配置驱动**：每企业 `conf.yaml` 的 `prompt` 段（角色、产品类目、禁答范围、语气）。
 - 检索片段注入时标注来源，并强约束「**仅依据所提供的资料作答，资料未覆盖则说不知道**」。
-- 系统提示优先级高于用户/检索内容，防注入（见八）。
+- 系统提示优先级高于用户/检索内容，防注入（**设计中，未落地，见八 §七**）。
 - **用户已明确约束块**（MOD-session P1 扩展）：`_build_messages` 在 system 末尾追加 `【用户已明确约束】`
   （月龄/段位/过敏原/预算/品牌/品类，来自 `UserConstraints`），让逐轮约束显式每轮校验；该块为可选参数，
   不传则行为与历史一致（向后兼容，`MockProvider` 忽略 system 内容故不影响既有闭环）。
@@ -51,7 +51,7 @@ session_ctx(user_msg, history, enterprise_id)
 - **citations**：每条回答附 `RetrievalHit{content, score, source, metadata}`，可映射回 kb 命中溯源。
 - **低置信拒答**：检索为空或 top 分数 < 阈值 → 坦诚「知识库暂无相关内容」，绝不编造。
 - **不暴露内部**：不向用户泄露系统提示 / 工具细节。
-- **健康免责**：命中母婴健康类 → 强制免责模板，不替代医疗诊断。
+- **健康免责**：**每次回答尾部无条件追加**免责模板（不替代医疗诊断），母婴健康类问题亦覆盖在内（与 `pipeline.py` 实际行为一致）。
 
 ---
 
@@ -80,7 +80,7 @@ session_ctx(user_msg, history, enterprise_id)
 | 幻觉 / 编造 | prompt 强约束 + 低置信拒答 + citations 强制 |
 | 跨企业泄露 | 检索强制 `enterprise_id` 过滤（MOD-kb 保证，D4） |
 | 数据出网 | provider 按企业配置；端侧企业用 Ollama 不出网（C2） |
-| prompt 注入 | 检索片段标记为不可信上下文；系统提示优先级最高；拒绝执行改系统提示的指令 |
+| prompt 注入（**未落地，仅设计**） | 设计：检索片段标记为不可信上下文；系统提示优先级最高；拒绝执行改系统提示的指令。**当前代码未实现**（检索片段直接拼接进 system，无"不可信"标记/拒绝改写守卫），且无 `test_agent_prompt_injection.py` harness，属已知待办。 |
 | 健康误导 | 强制免责模板，不替代医疗诊断 |
 | provider 故障 | 明确错误，不静默编造 |
 | 上下文膨胀 | 由 MOD-session 历史窗口控制，agent 只拿当前轮干净上下文 |
@@ -96,7 +96,7 @@ session_ctx(user_msg, history, enterprise_id)
 - `test_agent_disclaimer.py`：健康类回答尾部带免责模板。
 - `test_agent_citation_trace.py`：citations 可映射回 kb 具体命中。
 - `test_agent_isolation.py`：不同企业检索不串（依赖 MOD-kb 隔离）。
-- `test_agent_prompt_injection.py`：用户试图「忽略以上指令…」被拒，系统提示不被改。
+- `test_agent_prompt_injection.py`：用户试图「忽略以上指令…」被拒，系统提示不被改。**（未落地，仅验收草案；对应防护未在 `pipeline._build_messages` 实现）**
 - `test_agent_empty_kb.py`：kb 空时坦诚告知，不生成虚假建议。
 - `test_providers.py`（@module agent，**已落地**）：生产闭环真实 provider 代码路径验证（本地 stub ollama / OpenAI 服务，不依赖真机）。
   - **P1 ollama 真实路径**：请求 `/api/chat` 体含 `model`/`messages`/`temperature` 且 `stream:false`（修复默认流式 NDJSON 致 `r.json()` 崩溃），正确解析 `message.content`。
