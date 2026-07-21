@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>母婴垂类 Agent · 架构与流程详解</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #171e2e; --panel2: #1d2740; --ink: #e8edf6;
+    --muted: #9aa7bd; --line: #2a3550; --accent: #4f8cff; --accent2: #36d39a;
+    --warn: #ffb454; --pink: #ff7eb6; --purple: #b78bff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.6; font-size: 15px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  h2 { font-size: 21px; margin: 44px 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 16px; margin: 18px 0 8px; color: var(--accent2); }
+  p { color: var(--ink); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: 1fr 1fr; }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 860px) { .g2,.g3 { grid-template-columns: 1fr; } }
+  .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px;
+         background: var(--panel2); color: var(--muted); border: 1px solid var(--line); margin: 2px 4px 2px 0; }
+  .tag.acc { color: var(--accent); border-color: var(--accent); }
+  .tag.grn { color: var(--accent2); border-color: var(--accent2); }
+  .tag.warn { color: var(--warn); border-color: var(--warn); }
+
+  /* 部署形态 */
+  .inst { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .inst .agent { background: linear-gradient(135deg,#22324f,#1b2742); border: 1px solid var(--accent);
+                 border-radius: 8px; padding: 10px; text-align: center; font-weight: 600; }
+  .inst .meta { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+  /* 分层架构 */
+  .layer { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 10px 0; }
+  .layer > .lh { font-weight: 700; letter-spacing: .5px; margin-bottom: 10px; display:flex; align-items:center; gap:8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display:inline-block; }
+  .mods { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .mod { background: var(--panel2); border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px; padding: 10px 12px; }
+  .mod b { color: var(--ink); }
+  .mod .f { font-size: 12px; color: var(--muted); margin-top: 3px; font-family: ui-monospace, monospace; }
+  .arrow-down { text-align: center; color: var(--accent); font-size: 20px; margin: -2px 0; }
+
+  /* 流程时间线 */
+  .flow { position: relative; padding-left: 26px; }
+  .flow::before { content:""; position:absolute; left: 9px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+  .step { position: relative; margin: 10px 0; }
+  .step .num { position: absolute; left: -26px; top: 2px; width: 18px; height: 18px; border-radius: 50%;
+              background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display:flex; align-items:center; justify-content:center; }
+  .step .body { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .step .body b { color: var(--accent2); }
+  .substep { font-size: 13px; color: var(--muted); margin: 4px 0 0 14px; }
+
+  /* 序列条 */
+  .seq { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 12px 0; }
+  .seq .actor { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; text-align: center; padding: 8px; font-weight: 600; font-size: 13px; }
+
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--accent); background: var(--panel2); position: sticky; }
+  td.mono { font-family: ui-monospace, monospace; color: var(--muted); font-size: 13px; }
+
+  /* 安全卡片 */
+  .sec { border-left: 4px solid var(--warn); }
+  .sec .k { color: var(--warn); font-weight: 700; }
+  code { background: #0c111c; border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; font-size: 13px; color: #cfe0ff; }
+  .note { background: #11203a; border: 1px solid var(--accent); border-radius: 10px; padding: 12px 14px; color: #cfe0ff; }
+  .foot { color: var(--muted); font-size: 13px; margin-top: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>母婴垂类 Agent · 架构与流程详解</h1>
+  <p class="sub">TOB 母婴垂类 · 端侧 1 家 1 实例 · 多员工微信共用同一 Agent · 单会话按员工隔离 · 知识转化归一为统一接口</p>
+  <div>
+    <span class="tag acc">端侧部署</span><span class="tag acc">1家1实例</span>
+    <span class="tag grn">单会话隔离</span><span class="tag warn">P0 安全加固已落地</span>
+    <span class="tag">全量门禁 20/20 ALL GREEN</span>
+  </div>
+
+  <!-- 1. 部署形态 -->
+  <h2>1 · 部署形态：1 家企业 = 1 个 Agent 实例</h2>
+  <div class="grid g3">
+    <div class="inst">
+      <div class="agent">🏢 企业 A · Agent</div>
+      <div class="meta">独立容器 / 数据卷 / 配置<br/>员工甲·乙·丙 经微信共用</div>
+    </div>
+    <div class="inst">
+      <div class="agent">🏢 企业 B · Agent</div>
+      <div class="meta">独立容器 / 数据卷 / 配置<br/>物理·逻辑均不串（铁律）</div>
+    </div>
+    <div class="inst">
+      <div class="agent">🏢 企业 C · Agent</div>
+      <div class="meta">Windows 直装（低配门店）<br/>Python embeddable + 离线 wheels</div>
+    </div>
+  </div>
+  <div class="note">每个实例由 <code>enterprise.yaml</code> 配置驱动（产品结构 / LLM / 微信策略），通过 <code>EnterpriseConfig.from_yaml_with_env()</code> 加载，环境变量优先级高于 yaml —— 端侧不改文件即可切换模式。镜像绝不打包企业数据，数据只在挂载卷里。</div>
+
+  <!-- 2. 分层架构 -->
+  <h2>2 · 分层架构图</h2>
+
+  <div class="layer">
+    <div class="lh"><span class="dot" style="background:var(--pink)"></span>接入层 · Wechat（iLink Bot API）</div>
+    <div class="mods">
+      <div class="mod" style="border-left-color:var(--pink)"><b>WechatGateway</b><div class="f">wechat/gateway.py</div>编排整条链路：会话/约束/宝宝/回答/回写</div>
+      <div class="mod" style="border-left-color:var(--pink)"><b>ILinkClient</b><div class="f">wechat/ilink_client.py</div>长轮询 getUpdates + send_message（受 egress 白名单约束）</div>
+    </div>
+  </div>
+  <div class="arrow-down">▼</div>
+
+  <div class="layer">
+    <div class="lh"><span class="dot" style="background:var(--purple)"></span>会话层 · Session（单会话隔离）</div>
+    <div class="mods">
+      <div class="mod" style="border-left-color:var(--purple)"><b>SessionStore</b><div class="f">session/store.py</div>按 (ent,emp,conv) 隔离；历史/焦点宝宝/失败计数</div>
+      <div class="mod" style="border-left-color:var(--purple)"><b>UserConstraints</b><div class="f">session/constraints.py</div>用户约束：规则抽取累积 + 超阈 LLM 压缩合并</div>
+    </div>
+  </div>
+  <div class="arrow-down">▼</div>
+
+  <div class="layer">
+    <div class="lh"><span class="dot" style="background:var(--accent2)"></span>宝宝档案层 · Baby Profile</div>
+    <div class="mods">
+      <div class="mod" style="border-left-color:var(--accent2)"><b>resolve_and_extract</b><div class="f">baby/resolution.py</div>LLM 实体链接(归属) + 属性抽取 + cache_control 前缀</div>
+      <div class="mod" style="border-left-color:var(--accent2)"><b>resolve_and_archive</b><div class="f">baby/archive.py</div>混合建档安全网 + 主动归档（每轮累积）</div>
+      <div class="mod" style="border-left-color:var(--accent2)"><b>BabyProfileStore</b><div class="f">baby/store.py</div>持久化 + 落库加密（12 敏感字段）</div>
+    </div>
+  </div>
+  <div class="arrow-down">▼</div>
+
+  <div class="layer">
+    <div class="lh"><span class="dot" style="background:var(--accent)"></span>问答层 · Agent（RAG 管线）</div>
+    <div class="mods">
+      <div class="mod" style="border-left-color:var(--accent)"><b>Agent.answer</b><div class="f">agent/pipeline.py</div>RAG 6 步；稳定/半稳定/动态三段 prompt</div>
+      <div class="mod" style="border-left-color:var(--accent)"><b>LLM Providers</b><div class="f">agent/providers.py</div>Mock / Ollama / Cloud；Prompt Caching；egress 接线</div>
+    </div>
+  </div>
+  <div class="arrow-down">▼</div>
+
+  <div class="layer">
+    <div class="lh"><span class="dot" style="background:var(--warn)"></span>知识层 · Knowledge + Common</div>
+    <div class="mods">
+      <div class="mod" style="border-left-color:var(--warn)"><b>KnowledgeStore</b><div class="f">agent/knowledge*.py</div>向量检索 + embedding + rerank（按 enterprise_id 隔离）</div>
+      <div class="mod" style="border-left-color:var(--warn)"><b>EnterpriseConfig</b><div class="f">common/config.py</div>from_yaml_with_env 配置加载</div>
+      <div class="mod" style="border-left-color:var(--warn)"><b>PluginManager</b><div class="f">common/plugins.py</div>模型路径可插拔</div>
+      <div class="mod" style="border-left-color:var(--warn)"><b>Vault / Egress</b><div class="f">common/crypto.py · egress.py</div>健康数据加密 + 出网白名单</div>
+    </div>
+  </div>
+  <div class="arrow-down">▼</div>
+
+  <div class="layer">
+    <div class="lh"><span class="dot" style="background:#7fd1ff"></span>知识转化层 · Ingest（喂 KnowledgeStore）</div>
+    <div class="mods">
+      <div class="mod" style="border-left-color:#7fd1ff"><b>爬虫 / OCR / 归一</b><div class="f">ingest/ + scripts/ingest_bend.py</div>异构知识 → 统一接口 → 结构化产品表 + 向量库</div>
+      <div class="mod" style="border-left-color:#7fd1ff"><b>SeedAdapter</b><div class="f">app.seed_demo</div>灌入 HQ 共享库 + 企业产品（演示）</div>
+    </div>
+  </div>
+
+  <!-- 3. 端到端流程 -->
+  <h2>3 · 端到端消息流（一条用户消息的生命周期）</h2>
+  <div class="seq">
+    <div class="actor">👤 员工微信</div>
+    <div class="actor">📡 iLink API</div>
+    <div class="actor">🧭 Gateway</div>
+    <div class="actor">👶 Baby/Session</div>
+    <div class="actor">🤖 Agent+LLM</div>
+  </div>
+  <div class="flow">
+    <div class="step"><div class="num">1</div><div class="body"><b>入站</b>：ILinkClient <code>getUpdates</code> 长轮询拿到 <code>IncomingMessage</code>（message_id / from_user_id / content）。<div class="substep">ent=cfg.enterprise_id，emp=from_user_id，conv=from_user_id（DM：每员工一会话）</div></div></div>
+    <div class="step"><div class="num">2</div><div class="body"><b>会话加锁 + 去重</b>：<code>session_key(ent,emp,conv)</code> 取锁 → <code>get_or_create</code>；message_id 已见则跳过（幂等）。</div></div>
+    <div class="step"><div class="num">3</div><div class="body"><b>约束处理</b>（方向B+方向A）：<div class="substep">方向B：规则抽取本轮约束，确定性累积进会话状态（无 LLM）。</div><div class="substep">方向A：历史超阈 → LLM 压缩合并（合并而非替换，A3 修复）。</div></div></div>
+    <div class="step"><div class="num">4</div><div class="body"><b>宝宝链路</b>（若 <code>baby_profile_enabled</code> 且 baby_store 已装配）：<div class="substep">熔断检查：连续消歧失败 ≥ 阈值 → 降级「仅产品问答」。</div><div class="substep"><code>resolve_and_archive</code>：LLM 判归属 + 抽属性 + 混合建档安全网（自动建档 / 第三方不建）+ 主动归档。</div><div class="substep">设焦点宝宝 <code>set_focus_baby</code>；解析失败计数；焦点切换时刷新约束（A4/A5，消除旧宝宝残留）。</div><div class="substep">产出 <code>baby_block</code>（注入上下文）+ <code>baby_profile_obj</code>（检索查询融合）。</div></div></div>
+    <div class="step"><div class="num">5</div><div class="body"><b>RAG 回答</b> <code>Agent.answer</code> 六步：<div class="substep">① <code>_enrich_query</code>：用 baby_profile 融合检索查询，提升命中。</div><div class="substep">② <code>store.retrieve</code>：embedding + rerank，top_k=5（按 enterprise_id 隔离）。</div><div class="substep">③ <code>_build_context</code>：拼检索片段。</div><div class="substep">④ <code>_build_messages</code>：<b>稳定</b>(企业system+约束) → <b>半稳定</b>(baby_block) → <b>动态</b>(【企业知识库】context)。</div><div class="substep">⑤ <code>provider.complete(messages, cache_control)</code>：LLM 生成。</div><div class="substep">⑥ 附引用 + 免责声明。</div></div></div>
+    <div class="step"><div class="num">6</div><div class="body"><b>回写 + 出站</b>：<code>append_turn</code>(user/assistant) → <code>client.send_message</code> 经 iLink 回员工微信（出站受 egress 白名单约束）。</div></div>
+  </div>
+
+  <!-- 4. 模块职责明细 -->
+  <h2>4 · 模块职责明细</h2>
+  <table>
+    <thead><tr><th>层 / 模块</th><th>职责</th><th>关键文件</th></tr></thead>
+    <tbody>
+      <tr><td>接入 · WechatGateway</td><td>单条消息的总编排：会话锁、去重、约束、宝宝、回答、回写</td><td class="mono">wechat/gateway.py:45</td></tr>
+      <tr><td>接入 · ILinkClient</td><td>HTTP 长轮询收消息、context_token 续传、send_message 回复</td><td class="mono">wechat/ilink_client.py:39</td></tr>
+      <tr><td>会话 · SessionStore</td><td>(ent,emp,conv) 隔离历史/焦点宝宝/消歧失败计数；写锁</td><td class="mono">session/store.py</td></tr>
+      <tr><td>会话 · UserConstraints</td><td>用户约束结构化（月龄/过敏/预算/品牌…），抽取+压缩+合并</td><td class="mono">session/constraints.py</td></tr>
+      <tr><td>宝宝 · resolve_and_extract</td><td>LLM 实体链接（快速切换/代词指代）+ 属性抽取；cache_control 前缀</td><td class="mono">baby/resolution.py:391</td></tr>
+      <tr><td>宝宝 · resolve_and_archive</td><td>混合建档安全网（自动建档+第三方不建）+ 主动归档跨轮累积</td><td class="mono">baby/archive.py</td></tr>
+      <tr><td>宝宝 · BabyProfileStore</td><td>Customer(1→N BabyProfile) 持久化；落库加密 12 敏感字段；惰性迁移</td><td class="mono">baby/store.py:23</td></tr>
+      <tr><td>问答 · Agent.answer</td><td>RAG 6 步管线；稳定/半稳定/动态三段 prompt（Prompt Caching 友好）</td><td class="mono">agent/pipeline.py:113</td></tr>
+      <tr><td>问答 · Providers</td><td>Mock/Ollama/Cloud；Prompt Caching 断点；指数退避重试；egress 接线</td><td class="mono">agent/providers.py</td></tr>
+      <tr><td>知识 · KnowledgeStore</td><td>向量检索 + embedding(bge) + rerank；按 enterprise_id 隔离取用</td><td class="mono">agent/knowledge*.py</td></tr>
+      <tr><td>公共 · EnterpriseConfig</td><td>from_yaml_with_env：yaml 基础 + 环境变量覆盖（端侧切模式）</td><td class="mono">common/config.py:80</td></tr>
+      <tr><td>公共 · PluginManager</td><td>模型路径可插拔替换，不动业务代码</td><td class="mono">common/plugins.py</td></tr>
+      <tr><td>公共 · Vault</td><td>Fernet 加密（密钥 AGENT_DATA_ENCRYPTION_KEY）；生产缺密钥启动失败</td><td class="mono">common/crypto.py</td></tr>
+      <tr><td>公共 · EgressPolicy</td><td>应用层出网域名白名单；AGENT_EGRESS_ENFORCE / EXTRA_HOSTS</td><td class="mono">common/egress.py</td></tr>
+      <tr><td>转化 · Ingest</td><td>爬虫 / OCR / 异构归一为统一接口，写入 KnowledgeStore</td><td class="mono">ingest/ · scripts/ingest_bend.py</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 5. 安全加固 -->
+  <h2>5 · 安全加固（上线前必做 P0，已落地）</h2>
+  <div class="grid g3">
+    <div class="card sec">
+      <div class="k">P0-3 健康数据加密</div>
+      <p><code>common/crypto.Vault</code> 用 Fernet 在落库边界加密 12 个敏感字段（月龄/性别/过敏/预算/品牌/病史/生日…）；<code>name</code>/<code>customer_id</code> 保持明文（实体链接必需）。生产缺 <code>AGENT_DATA_ENCRYPTION_KEY</code> 启动即失败。</p>
+      <span class="tag grn">harness: test_data_encryption (6/6)</span>
+    </div>
+    <div class="card sec">
+      <div class="k">P0-2 出入站白名单</div>
+      <p><code>common/egress.EgressPolicy</code> + <code>AllowedAsyncClient</code> 应用层出网域名强制。默认放通 iLink 两域名 + 显式 LLM 端点；<code>AGENT_EGRESS_ENFORCE=1</code> 开启拦截，<code>AGENT_EGRESS_EXTRA_HOSTS</code> 逃生阀。</p>
+      <span class="tag grn">harness: test_deploy_egress (7/7)</span>
+    </div>
+    <div class="card sec">
+      <div class="k">P0-1 密钥环境变量化</div>
+      <p>凭证仅经 <code>env_file:.env.local</code> 注入（不内联/不打包）；<code>.gitignore</code> 忽略 <code>.env*</code>；<code>secret_scan.py</code> 防提交密钥（CI 可挂）。</p>
+      <span class="tag grn">harness: test_secret_scan (4/4)</span>
+    </div>
+  </div>
+
+  <!-- 6. Prompt Caching -->
+  <h2>6 · Prompt Caching（成本优化）</h2>
+  <div class="note">
+    <b>核心思想：让前缀稳定。</b> 把「跨调用一致」的内容放在 <code>messages[0]</code>（system），每轮变量（焦点/历史/当前句）放在其后。
+    <ul style="margin:8px 0 0">
+      <li><b>消歧</b>：稳定前缀 = 指令 + 已知宝宝清单（JSON，<code>ORDER BY</code> 保证序列化一致）→ 开 <code>cache_control</code>。</li>
+      <li><b>RAG</b>：稳定企业 prompt → 半稳定 baby_block → 动态检索 context（顺序即缓存键）。</li>
+      <li><b>效果</b>：同员工会话前缀命中缓存，input token 费用降 50–90%；Anthropic 显式断点，OpenAI/兼容端点靠自动前缀缓存。</li>
+      <li><b>监控</b>：<code>_report_cache_hit</code> 解析 <code>usage.prompt_tokens_details.cached_tokens</code> 记命中率。</li>
+    </ul>
+  </div>
+
+  <!-- 7. 装配与部署 -->
+  <h2>7 · 装配（composition root）与部署</h2>
+  <div class="card">
+    <b>入口装配</b>：<code>main.py</code> → <code>EnterpriseConfig.from_yaml_with_env(enterprise.yaml)</code> → <code>app.build_instance(cfg)</code> 串起五大件：
+    <div class="mono" style="margin-top:8px; color:#cfe0ff">KnowledgeStore ┐<br/>SessionStore    ├─ build_instance ─▶ WechatGateway(cfg, session, agent, client, baby_store)<br/>BabyProfileStore┤<br/>Agent           ┤   Agent(cfg, store)<br/>ILinkClient     ┘   ILinkClient(cfg.wechat)</div>
+    <p style="margin-top:10px">（<code>baby_store</code> 装配是 A1 修复点——之前漏建导致端侧宝宝模块整体失效。）</p>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card"><h3>Docker（服务器/高配门店）</h3><p><code>docker-compose up -d</code>：每企业独立 project / 数据卷 / secret；compose 经 <code>env_file</code> 注入凭证。</p></div>
+    <div class="card"><h3>Windows 直装（低配门店）</h3><p>Python embeddable + 三层依赖（Tier1 URL 拉取 / Tier2 捆绑 / Tier3 可插拔）+ <code>configure.ps1</code> 向导生成 <code>.env.local</code>。</p></div>
+  </div>
+
+  <div class="foot">端侧 1 家 1 实例 · 单会话隔离 · 健康数据加密 · 出网白名单 · 密钥环境变量化 · 全量门禁 20/20 ALL GREEN</div>
+</div>
+</body>
+</html>
