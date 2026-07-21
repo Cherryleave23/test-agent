@@ -87,7 +87,8 @@ def focus_is_stable(known: List[dict], focus_baby_id: Optional[int],
     """结果缓存判据：焦点是否稳定到可跳过 LLM 实体链接。
 
     返回 True 当且仅当：已有焦点宝宝；且当前消息未提及任何「非焦点」的已知宝宝/客户名
-    （否则可能是快速切换）；且不含第三方/假设提及（应交 LLM 判定 is_third_party）。
+    （否则可能是快速切换）；且不含第三方/假设提及（应交 LLM 判定 is_third_party）；
+    且消息含宝宝信号时必须提及焦点宝宝/客户名（否则可能是新宝宝，交 LLM 建档）。
 
     稳定时调用方可用规则抽取直接归档到焦点宝宝，省去一次 LLM 调用——
     属性抽取本就是规则（LLM 仅做实体链接），质量无损。
@@ -99,15 +100,26 @@ def focus_is_stable(known: List[dict], focus_baby_id: Optional[int],
     focus_names = set()
     for it in known:
         if it.get("baby_id") == focus_baby_id:
-            focus_names.add(_norm(it.get("baby_name", "")))
-            focus_names.add(_norm(it.get("customer_name", "")))
+            fn = _norm(it.get("baby_name", ""))
+            cn = _norm(it.get("customer_name", ""))
+            if fn:
+                focus_names.add(fn)
+            if cn:
+                focus_names.add(cn)
     msg_n = _norm(current_msg)
+    # 检测 known 中非焦点宝宝名（快速切换检测）
     for it in known:
         nb = _norm(it.get("baby_name", ""))
         nc = _norm(it.get("customer_name", ""))
         if nb and nb not in focus_names and nb in msg_n:
             return False
         if nc and nc not in focus_names and nc in msg_n:
+            return False
+    # 新增：消息含宝宝信号但不含焦点宝宝名/客户名 → 可能是新宝宝，交 LLM 建档
+    # （缺陷修复：原逻辑只检测 known 中已有的非焦点名，不检测新宝宝名，
+    #   导致从零建档场景下新宝宝信息被错误归到焦点宝宝）
+    if _BABY_SIGNALS.search(current_msg or ""):
+        if not any(fn in msg_n for fn in focus_names):
             return False
     return True
 
