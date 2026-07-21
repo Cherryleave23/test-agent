@@ -261,10 +261,11 @@ class DisambigMockProvider:
             }
 
             if _norm(baby_name) in known_baby_names:
-                # 已建档 → chat，只返回 baby 名（避免 (客户,宝宝) 精确匹配失败）
+                # 已建档 → chat，返回 baby 名 + 消息中提到的客户名（如有）
+                # （D2 验证：客户名补充需 Mock 返回 customer 字段）
                 return json.dumps({
                     "action": "chat",
-                    "customer": "",
+                    "customer": customer,
                     "baby": baby_name,
                     "extracted": extracted,
                     "is_third_party": False,

@@ -120,19 +120,134 @@ def focus_is_stable(known: List[dict], focus_baby_id: Optional[int],
     #   导致从零建档场景下新宝宝信息被错误归到焦点宝宝）
     if _BABY_SIGNALS.search(current_msg or ""):
         if not any(fn in msg_n for fn in focus_names):
-            return False
+            # D4 修复：消息含代词指代信号且不含任何已知宝宝名 → 代词指代焦点，规则短路
+            # （降低 LLM 调用率：代词指代焦点时无需 LLM 实体链接）
+            if _PRONOUN_SIGNALS.search(current_msg or ""):
+                # 再次确认不含 known 中其他宝宝名（快速切换检测已在上方完成）
+                return True
+            return False  # 无代词 → 可能新宝宝，交 LLM
     return True
 
 
+# 结构化字段规则抽取词表（D1 修复：_rule_extract 支持 v2 字段）
+_BIRTH_DATE_RE = re.compile(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?")
+_GESTATIONAL_WEEKS_RE = re.compile(r"早产\s*(\d{1,2})\s*周|孕周\s*(\d{1,2})|(\d{1,2})\s*周出生")
+_MEDICAL_HISTORY_KEYWORDS = [
+    ("NICU", "NICU住院"), ("新生儿科", "新生儿科"), ("脑室出血", "脑室出血"),
+    ("贫血", "贫血"), ("早产", None),  # "早产"单独处理（与 gestational_weeks 联动）
+    ("黄疸", "黄疸"), ("低体重", "低体重"), ("窒息", "窒息"),
+    ("先心", "先心病"), ("心脏", "心脏问题"),
+]
+_FEEDING_HISTORY_KEYWORDS = [
+    ("混合喂养", "混合喂养"), ("纯奶粉", "纯奶粉"), ("纯母乳", "纯母乳"),
+    ("水解奶粉", "深度水解奶粉"), ("氨基酸奶粉", "氨基酸奶粉"),
+    ("吐奶", "吐奶"), ("喷射性吐奶", "喷射性吐奶"),
+    ("辅食", None),  # 辅食相关不作为喂养史
+]
+# 代词指代信号（D4 修复：focus_is_stable 代词优化）
+_PRONOUN_SIGNALS = re.compile(r"他|她|它|这个|这宝宝|这个宝宝|咱|咱们家|咱家|娃", re.IGNORECASE)
+
+
+def _extract_birth_date(text: str) -> str:
+    """从文本中抽取 ISO 格式出生日期（YYYY-MM-DD）。"""
+    m = _BIRTH_DATE_RE.search(text or "")
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"{y}-{mo:02d}-{d:02d}"
+    return ""
+
+
+def _extract_gestational_weeks(text: str) -> Optional[int]:
+    """从文本中抽取孕周数（如 '早产35周' → 35）。"""
+    m = _GESTATIONAL_WEEKS_RE.search(text or "")
+    if m:
+        for g in m.groups():
+            if g:
+                try:
+                    v = int(g)
+                    if 20 <= v <= 45:  # 合理孕周范围
+                        return v
+                except ValueError:
+                    pass
+    return None
+
+
+def _extract_medical_history(text: str) -> List[str]:
+    """从文本中抽取医疗史关键词。"""
+    result = []
+    t = text or ""
+    for kw, label in _MEDICAL_HISTORY_KEYWORDS:
+        if kw in t:
+            if label is None:
+                # "早产"单独处理：构造完整描述
+                gw = _extract_gestational_weeks(t)
+                if gw:
+                    result.append(f"早产{gw}周")
+                else:
+                    result.append("早产")
+            elif label not in result:
+                result.append(label)
+    # 出生体重（如 "5.18斤" "出生5斤"）
+    m = re.search(r"出生[^\d]*?(\d+\.?\d*)\s*斤", t)
+    if m:
+        result.append(f"出生{m.group(1)}斤")
+    # 住院天数（如 "NICU住院15天" "新生儿科住了9天"）
+    m = re.search(r"(?:NICU|新生儿科)[^\d]*?住院?\s*(\d+)\s*天|住了\s*(\d+)\s*天", t)
+    if m:
+        days = m.group(1) or m.group(2)
+        location = "NICU" if "NICU" in t else "新生儿科"
+        result.append(f"{location}住院{days}天")
+    return result
+
+
+def _extract_feeding_history(text: str) -> List[str]:
+    """从文本中抽取喂养史关键词。"""
+    result = []
+    t = text or ""
+    for kw, label in _FEEDING_HISTORY_KEYWORDS:
+        if kw in t and label and label not in result:
+            result.append(label)
+    # 奶粉转换序列（如 "深度水解后来氨基酸现在a2至初"）
+    m = re.search(r"(深度水解|水解).{0,10}?(氨基酸).{0,10}?([aA]\d|a2|爱他美|飞鹤|合生元)", t)
+    if m and "深度水解奶粉→氨基酸奶粉→a2至初" not in result:
+        # 尝试构造转换序列
+        parts = []
+        if "深度水解" in t or "水解" in t:
+            parts.append("深度水解奶粉")
+        if "氨基酸" in t:
+            parts.append("氨基酸奶粉")
+        # 检查是否有具体品牌名作为终点
+        for brand in ["a2至初", "a2", "爱他美", "飞鹤", "合生元"]:
+            if brand in t:
+                parts.append(brand)
+                break
+        if len(parts) >= 2:
+            result.append("→".join(parts))
+    return result
+
+
 def _rule_extract(text: str) -> BabyProfile:
-    """规则抽取（复用 UserConstraints 词表），返回仅含属性的 BabyProfile 壳。"""
+    """规则抽取（复用 UserConstraints 词表 + v2 结构化字段），返回仅含属性的 BabyProfile 壳。
+
+    D1 修复：原 _rule_extract 只抽取基础字段（baby_age/stage/allergens/budget/brand/category），
+    不抽取 v2 结构化字段（birth_date/gestational_weeks/medical_history/feeding_history），
+    导致规则短路路径丢失这些字段。
+    """
     c = extract_constraints(text or "")
+    birth_date = _extract_birth_date(text)
+    gestational_weeks = _extract_gestational_weeks(text)
+    medical_history = _extract_medical_history(text)
+    feeding_history = _extract_feeding_history(text)
     return BabyProfile(
         baby_id=None, enterprise_id="", employee_id="", customer_id=0,
         name="", baby_age=c.baby_age, stage=c.stage,
         allergens=list(c.allergens), budget=c.budget,
         brand_preference=list(c.brand_preference), category=c.category,
         health_notes=c.notes,
+        birth_date=birth_date,
+        gestational_weeks=gestational_weeks,
+        medical_history=medical_history,
+        feeding_history=feeding_history,
     )
 
 
@@ -145,6 +260,9 @@ def _match_known(known: List[dict], customer: str, baby: str):
 
     防跨客户误配（缺陷 B）：给了客户名时**只**做 (客户,宝宝) 精确匹配，绝不跨客户按宝宝名兜底；
     仅给宝宝名且全局唯一才匹配；同名多客户视为歧义返回 None（不自动匹配，交回焦点/显式建档）。
+
+    D2 修复：精确 (客户,宝宝) 匹配失败时，若宝宝名全局唯一则退化为按宝宝名单独匹配——
+    客户名可能尚未更新（建档时为「（未命名客户）」），不应因此导致焦点兜底串档。
     """
     nb, nc = _norm(baby), _norm(customer)
     if nb and nc:
@@ -152,7 +270,15 @@ def _match_known(known: List[dict], customer: str, baby: str):
             if (_norm(it.get("baby_name", "")) == nb
                     and _norm(it.get("customer_name", "")) == nc):
                 return it.get("customer_id"), it.get("baby_id")
-        return None, None  # 给了客户但无精确(客户,宝宝) → 视为新宝宝，不跨客户误配
+        # D2 修复：精确匹配失败 → 检查是否有同名宝宝且客户名为「（未命名客户）」
+        # 客户名尚未更新时（建档时未提供客户名）→ 匹配（D2 场景）
+        # 客户名已是真实客户名 → 跨客户新宝宝，不匹配（P10 防污染场景）
+        hits = [it for it in known if _norm(it.get("baby_name", "")) == nb]
+        if len(hits) == 1:
+            cust_name = hits[0].get("customer_name", "")
+            if cust_name == "（未命名客户）":
+                return hits[0].get("customer_id"), hits[0].get("baby_id")
+        return None, None  # 跨客户或同名歧义 → 不自动匹配
     if nb:
         hits = [it for it in known if _norm(it.get("baby_name", "")) == nb]
         if len(hits) == 1:

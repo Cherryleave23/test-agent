@@ -18,6 +18,43 @@ from baby.store import BabyProfileStore
 from baby.resolution import resolve_and_extract, _rule_extract, focus_is_stable
 
 
+_UNNAMED_CUSTOMER = "（未命名客户）"
+_AUTO_CONFIRM_THRESHOLD = 3  # D3: pending 宝宝累积 ≥3 个非空属性时自动转 confirmed
+
+
+def _count_non_empty_attrs(baby: BabyProfile) -> int:
+    """统计宝宝档案中非空属性数（D3: 信息丰度自动确认判据）。"""
+    count = 0
+    if baby.baby_age:
+        count += 1
+    if baby.stage:
+        count += 1
+    if baby.allergens:
+        count += 1
+    if baby.brand_preference:
+        count += 1
+    if baby.budget is not None:
+        count += 1
+    if baby.birth_date:
+        count += 1
+    if baby.gestational_weeks is not None:
+        count += 1
+    if baby.medical_history:
+        count += 1
+    if baby.feeding_history:
+        count += 1
+    return count
+
+
+def _maybe_auto_confirm(store: BabyProfileStore, baby_id: int) -> None:
+    """D3: 信息丰度自动确认——pending 宝宝累积 ≥3 个非空属性时自动转 confirmed。"""
+    baby = store.get_baby(baby_id)
+    if baby is None:
+        return
+    if baby.status == "pending" and _count_non_empty_attrs(baby) >= _AUTO_CONFIRM_THRESHOLD:
+        store.mark_confirmed(baby_id)
+
+
 @dataclass
 class ArchiveResult:
     focus_baby_id: Optional[int]
@@ -73,6 +110,23 @@ async def resolve_and_archive(
         # 主动归档：把抽取的明确属性 upsert 进档案（跨轮累积）
         if res.extracted and not res.extracted.is_empty_attr():
             store.upsert_baby_attrs(bid, res.extracted)
+        # D2 修复：如果 LLM 返回了客户名且当前客户名为「（未命名客户）」，更新客户名
+        # 注意：多个宝宝可能共享同一「（未命名客户）」customer 记录，
+        #       直接更新 name 会串档 → 创建新 customer 记录并更新 baby 的 customer_id 关联
+        if res.customer and res.customer != _UNNAMED_CUSTOMER:
+            cid_to_update = res.customer_id
+            if cid_to_update is None:
+                baby_row = store.get_baby(bid)
+                if baby_row:
+                    cid_to_update = baby_row.customer_id
+            if cid_to_update:
+                cust = store.get_customer(cid_to_update)
+                if cust and cust.name == _UNNAMED_CUSTOMER:
+                    # 创建新的独立 customer 记录，避免影响共享「（未命名客户）」的其他宝宝
+                    new_cid = store.get_or_create_customer(ent, emp, res.customer)
+                    store.update_baby_customer(bid, new_cid)
+        # D3 修复：信息丰度自动确认
+        _maybe_auto_confirm(store, bid)
         if action == "confirm":
             store.mark_confirmed(bid)
         elif action == "delete":
@@ -93,7 +147,7 @@ async def resolve_and_archive(
 
     # 未匹配已知宝宝 → 混合式自动建档（待确认安全网）
     if res.baby:
-        cust_name = res.customer or "（未命名客户）"
+        cust_name = res.customer or _UNNAMED_CUSTOMER
         cid = store.get_or_create_customer(ent, emp, cust_name)
         existing = store.find_baby_by_name(ent, emp, res.baby)
         if existing is not None:
@@ -108,6 +162,15 @@ async def resolve_and_archive(
             created = True
         if res.extracted and not res.extracted.is_empty_attr():
             store.upsert_baby_attrs(bid, res.extracted)
+        # D2 修复：新建档时客户名为「（未命名客户）」，后续消息提供真实客户名时更新
+        # 注意：共享 customer 记录串档问题同样存在于新建档路径
+        if res.customer and res.customer != _UNNAMED_CUSTOMER:
+            cust = store.get_customer(cid)
+            if cust and cust.name == _UNNAMED_CUSTOMER:
+                new_cid = store.get_or_create_customer(ent, emp, res.customer)
+                store.update_baby_customer(bid, new_cid)
+        # D3 修复：信息丰度自动确认
+        _maybe_auto_confirm(store, bid)
         if action == "confirm":
             store.mark_confirmed(bid)
         focus_baby_id = bid

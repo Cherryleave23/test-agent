@@ -117,6 +117,32 @@ class BabyProfileStore:
             phone=row["phone"] or "", notes=row["notes"] or "",
         )
 
+    def update_customer_name(self, customer_id: int, name: str) -> None:
+        """更新客户名（D2 修复：已建档宝宝客户名后续补充）。
+
+        当自动建档时客户名为「（未命名客户）」，后续消息提供真实客户名时调用。
+        """
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE customers SET name=? WHERE customer_id=?",
+                (name, customer_id),
+            )
+            conn.commit()
+
+    def update_baby_customer(self, baby_id: int, customer_id: int) -> None:
+        """更新宝宝的客户关联（D2 修复：避免共享 customer 记录导致串档）。
+
+        多个宝宝建档时客户名均为「（未命名客户）」会共享同一 customer 记录。
+        直接更新该 customer 记录的 name 会影响所有共享宝宝。
+        本方法创建新的 customer 记录并更新 baby 的 customer_id 关联，避免串档。
+        """
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE babies SET customer_id=? WHERE baby_id=?",
+                (customer_id, baby_id),
+            )
+            conn.commit()
+
     # ------------------------------------------------------------------
     # babies
     # ------------------------------------------------------------------

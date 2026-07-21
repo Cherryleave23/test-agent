@@ -53,6 +53,7 @@
 | `feat(baby-v2)` | **P2-v2 档案 schema 扩展 + 检索查询融合** | `birth_date`/`gestational_weeks`/`medical_history`/`feeding_history` 结构化字段 + SQL 自动迁移 + `_enrich_query()` 检索查询融合档案上下文 + LLM 消歧器抽取新字段 | baby P24-P27 + agent P28-P29 共 13 断言全绿 |
 | `feat(baby-v2)` | **P2-v2 终极实战 harness（从零建档版）** | 5 宝宝差异化档案 + 34 条碎片化信息从空库随机打乱逐条发送 + Mock Provider 只返回单条属性（迫使跨轮累积）+ 5 交叉提问随机分配 + 无串档/焦点切换/回答正确验收 | baby P30-P39 全绿 |
 | `fix(baby)` | **P0 修复：focus_is_stable 新宝宝名检测** | 从零建档场景下 `focus_is_stable` 不检测新宝宝名导致新宝宝不被建档 + 串档；修复：消息含宝宝信号但不含焦点宝宝名时返回 False 交 LLM 建档 | 终极实战 6/6 + 全量 14/14 全绿 |
+| `fix(baby)` | **P1 修复：4 项档案能力缺陷（D1-D4）** | D1 `_rule_extract` 支持结构化字段抽取（birth_date/gestational_weeks/medical_history/feeding_history）+ D2 客户名后续补充（创建独立 customer 记录避免共享串档）+ D3 信息丰度自动确认（pending 累积≥3属性转 confirmed）+ D4 focus_is_stable 代词指代优化 + `_match_known` 退化匹配区分未命名客户 | 终极实战 6/6 + 全量 14/14 全绿 |
 
 > **全量门禁：14/14 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
 > 设 `RUN_REAL_MODEL=1` 并加 `--timeout 600` 可显式运行（bge 语义嵌入弯曲 7/7、真实重排 4/4 均绿）。
