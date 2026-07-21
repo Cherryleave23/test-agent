@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 
 from common.config import LLMConfig
+from common.egress import AllowedAsyncClient, get_policy
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,7 @@ class OllamaProvider(LLMProvider):
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
         self.base = (cfg.base_url or "http://localhost:11434").rstrip("/")
+        get_policy().allow(self.base)  # 端侧合法出网端点并入白名单
 
     async def complete(self, messages, retrieved_hits=None,
                        cache_control: bool = False, **kw) -> str:
@@ -176,7 +178,7 @@ class OllamaProvider(LLMProvider):
         # 必须显式 stream:false 才返回单条 JSON {"message": {"content": ...}}。
         # A6 修复：包裹在 _complete_with_retry 中，网络抖动时指数退避重试。
         async def _do_request():
-            async with httpx.AsyncClient(timeout=60) as c:
+            async with AllowedAsyncClient(timeout=60) as c:
                 r = await c.post(
                     f"{self.base}/api/chat",
                     json={"model": self.cfg.model, "messages": messages,
@@ -194,6 +196,7 @@ class CloudProvider(LLMProvider):
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
         self.base = (cfg.base_url or "https://api.openai.com/v1").rstrip("/")
+        get_policy().allow(self.base)  # 显式配置的云 LLM 端点并入白名单
 
     async def complete(self, messages, retrieved_hits=None,
                        cache_control: bool = False, **kw) -> str:
@@ -208,7 +211,7 @@ class CloudProvider(LLMProvider):
 
         # A6 修复：包裹在 _complete_with_retry 中，网络抖动/5xx/429 时指数退避重试。
         async def _do_request():
-            async with httpx.AsyncClient(timeout=60) as c:
+            async with AllowedAsyncClient(timeout=60) as c:
                 r = await c.post(
                     f"{self.base}/chat/completions",
                     headers=headers,

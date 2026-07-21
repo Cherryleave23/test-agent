@@ -11,6 +11,7 @@ from typing import List, Optional
 
 from common.db import connect
 from baby.models import BabyProfile, Customer
+from common.crypto import get_vault
 import threading
 import time
 
@@ -18,6 +19,29 @@ import time
 def _norm(s: str) -> str:
     import re
     return re.sub(r"\s+", "", (s or "").strip()).lower()
+
+
+# ---- P0-3 健康数据加密：落库边界加/解密 ---------------------------------
+# 敏感健康字段（baby_age/gender/stage/allergens_json/budget/brand_preference_json/
+# category/health_notes/birth_date/gestational_weeks/medical_history_json/
+# feeding_history_json）在写入时加密、读取时解密；name/customer_id 等查询/实体
+# 链接必需字段保持明文。Vault 缺 key 时开发模式用确定性 dev key（见 common.crypto）。
+def _enc(value) -> object:
+    """非空值加密为带前缀 token；空值/None 保持原样（NULL/空串）。"""
+    if value is None or value == "":
+        return value
+    return get_vault().encrypt(str(value))
+
+
+def _dec(raw, cast=str):
+    """解密；旧库数字/空值/无前缀明文原样返回。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return raw  # 旧库数字（budget/gestational_weeks）
+    if raw == "":
+        return "" if cast is str else None
+    return cast(get_vault().decrypt(raw))
 
 
 class BabyProfileStore:
@@ -155,13 +179,13 @@ class BabyProfileStore:
                    birth_date, gestational_weeks, medical_history_json, feeding_history_json)
                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (baby.enterprise_id, baby.employee_id, baby.customer_id, baby.name,
-                 baby.baby_age, baby.gender, baby.stage,
-                 json.dumps(baby.allergens, ensure_ascii=False),
-                 baby.budget, json.dumps(baby.brand_preference, ensure_ascii=False),
-                 baby.category, baby.health_notes, baby.status, time.time(), time.time(),
-                 baby.birth_date, baby.gestational_weeks,
-                 json.dumps(baby.medical_history, ensure_ascii=False),
-                 json.dumps(baby.feeding_history, ensure_ascii=False)),
+                 _enc(baby.baby_age), _enc(baby.gender), _enc(baby.stage),
+                 _enc(json.dumps(baby.allergens, ensure_ascii=False)),
+                 _enc(baby.budget), _enc(json.dumps(baby.brand_preference, ensure_ascii=False)),
+                 _enc(baby.category), _enc(baby.health_notes), baby.status, time.time(), time.time(),
+                 _enc(baby.birth_date), _enc(baby.gestational_weeks),
+                 _enc(json.dumps(baby.medical_history, ensure_ascii=False)),
+                 _enc(json.dumps(baby.feeding_history, ensure_ascii=False))),
             )
             conn.commit()
             return cur.lastrowid
@@ -181,18 +205,18 @@ class BabyProfileStore:
             baby_id=row["baby_id"], enterprise_id=row["enterprise_id"],
             employee_id=row["employee_id"], customer_id=row["customer_id"],
             name=row["name"],
-            baby_age=row["baby_age"] or "",
-            gender=row["gender"] or "",
-            stage=row["stage"] or "",
-            allergens=json.loads(row["allergens_json"] or "[]"),
-            budget=row["budget"],
-            brand_preference=json.loads(row["brand_preference_json"] or "[]"),
-            category=row["category"] or "",
-            health_notes=row["health_notes"] or "",
-            birth_date=row["birth_date"] or "",
-            gestational_weeks=row["gestational_weeks"],
-            medical_history=json.loads(row["medical_history_json"] or "[]"),
-            feeding_history=json.loads(row["feeding_history_json"] or "[]"),
+            baby_age=_dec(row["baby_age"]),
+            gender=_dec(row["gender"]),
+            stage=_dec(row["stage"]),
+            allergens=json.loads(_dec(row["allergens_json"]) or "[]"),
+            budget=_dec(row["budget"], cast=float),
+            brand_preference=json.loads(_dec(row["brand_preference_json"]) or "[]"),
+            category=_dec(row["category"]),
+            health_notes=_dec(row["health_notes"]),
+            birth_date=_dec(row["birth_date"]),
+            gestational_weeks=_dec(row["gestational_weeks"], cast=int),
+            medical_history=json.loads(_dec(row["medical_history_json"]) or "[]"),
+            feeding_history=json.loads(_dec(row["feeding_history_json"]) or "[]"),
             status=row["status"] or "pending",
         )
 
@@ -211,13 +235,13 @@ class BabyProfileStore:
                        birth_date=?, gestational_weeks=?,
                        medical_history_json=?, feeding_history_json=?
                        WHERE baby_id=?""",
-                    (merged.customer_id, merged.name, merged.baby_age, merged.gender,
-                     merged.stage, json.dumps(merged.allergens, ensure_ascii=False),
-                     merged.budget, json.dumps(merged.brand_preference, ensure_ascii=False),
-                     merged.category, merged.health_notes, merged.status, time.time(),
-                     merged.birth_date, merged.gestational_weeks,
-                     json.dumps(merged.medical_history, ensure_ascii=False),
-                     json.dumps(merged.feeding_history, ensure_ascii=False),
+                    (merged.customer_id, merged.name, _enc(merged.baby_age), _enc(merged.gender),
+                     _enc(merged.stage), _enc(json.dumps(merged.allergens, ensure_ascii=False)),
+                     _enc(merged.budget), _enc(json.dumps(merged.brand_preference, ensure_ascii=False)),
+                     _enc(merged.category), _enc(merged.health_notes), merged.status, time.time(),
+                     _enc(merged.birth_date), _enc(merged.gestational_weeks),
+                     _enc(json.dumps(merged.medical_history, ensure_ascii=False)),
+                     _enc(json.dumps(merged.feeding_history, ensure_ascii=False)),
                      baby_id),
                 )
                 conn.commit()
@@ -250,13 +274,13 @@ class BabyProfileStore:
                        birth_date=?, gestational_weeks=?,
                        medical_history_json=?, feeding_history_json=?
                        WHERE baby_id=?""",
-                    (merged.customer_id, merged.name, merged.baby_age, merged.gender,
-                     merged.stage, json.dumps(merged.allergens, ensure_ascii=False),
-                     merged.budget, json.dumps(merged.brand_preference, ensure_ascii=False),
-                     merged.category, merged.health_notes, merged.status, time.time(),
-                     merged.birth_date, merged.gestational_weeks,
-                     json.dumps(merged.medical_history, ensure_ascii=False),
-                     json.dumps(merged.feeding_history, ensure_ascii=False),
+                    (merged.customer_id, merged.name, _enc(merged.baby_age), _enc(merged.gender),
+                     _enc(merged.stage), _enc(json.dumps(merged.allergens, ensure_ascii=False)),
+                     _enc(merged.budget), _enc(json.dumps(merged.brand_preference, ensure_ascii=False)),
+                     _enc(merged.category), _enc(merged.health_notes), merged.status, time.time(),
+                     _enc(merged.birth_date), _enc(merged.gestational_weeks),
+                     _enc(json.dumps(merged.medical_history, ensure_ascii=False)),
+                     _enc(json.dumps(merged.feeding_history, ensure_ascii=False)),
                      target_id),
                 )
                 conn.execute("DELETE FROM babies WHERE baby_id=?", (source_id,))
@@ -323,9 +347,11 @@ class BabyProfileStore:
             out.append({
                 "baby_id": r["baby_id"], "baby_name": r["baby_name"],
                 "customer_id": r["customer_id"], "customer_name": r["customer_name"],
-                "baby_age": r["baby_age"] or "", "stage": r["stage"] or "",
-                "allergens": json.loads(r["allergens_json"] or "[]"),
-                "budget": r["budget"], "category": r["category"] or "",
+                "baby_age": _dec(r["baby_age"]),
+                "stage": _dec(r["stage"]),
+                "allergens": json.loads(_dec(r["allergens_json"]) or "[]"),
+                "budget": _dec(r["budget"], cast=float),
+                "category": _dec(r["category"]),
                 "status": r["status"] or "pending",
             })
         return out

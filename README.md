@@ -70,7 +70,7 @@
 | MOD-session | **partial（P1 已落地）** | 三级隔离 + 用户约束累积/压缩已交付 |
 | MOD-baby-profile | **partial（P2 + P2-v2 已落地）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 / 焦点稳定结果缓存 / Prompt Caching 稳定前缀 + ORDER BY + 预热；**schema v2: `birth_date`/`gestational_weeks`/`medical_history`/`feeding_history` 结构化字段 + SQL 自动迁移**；**终极实战 harness: 5 宝宝 34 条碎片化信息随机归档 + 交叉提问验收（P30-P39）** |
 | MOD-wechat | partial | iLink Bot API 网关 + 约束/档案接线已落地 |
-| MOD-deploy | **partial（P1 已落地）** | **Windows 直装 + 三层依赖分层（Tier1 URL拉取/Tier2 捆绑/Tier3 可插拔）+ `configure.ps1` 配置向导 + 环境变量覆盖 + `PluginManager` 可插拔模型路径** 已落地 |
+| MOD-deploy | **partial（P1 + P0 安全已落地）** | **Windows 直装 + 三层依赖分层 + `configure.ps1` 配置向导 + 环境变量覆盖 + `PluginManager` 可插拔模型路径** + **P0 安全**：密钥环境变量化(`from_yaml_with_env`+env_file+secret_scan) / 出入站白名单(`egress.EgressPolicy`) / 健康数据加密(`crypto.Vault`) 均已落地并配 harness |
 
 ## 端侧部署
 
@@ -120,10 +120,21 @@ docker-compose -f deploy/docker-compose.yml up -d
 
 详见 [`deploy/Dockerfile`](deploy/Dockerfile) 和 [`deploy/docker-compose.yml`](deploy/docker-compose.yml)。
 
+### 部署安全清单（P0，上线前必做）
+
+| 控制 | 做法 | 验证 |
+|------|------|------|
+| 密钥环境变量化 | 凭证仅经 `env_file: .env.local` 注入，不内联/不打包；`.env*` 被 gitignore；`deploy/.env.example` 为模板 | `harness/test_secret_scan.py` + CI `scripts/secret_scan.py` |
+| 出入站白名单 | 应用层 `EgressPolicy` 仅放通 `ilinkai.weixin.qq.com` / CDN 域名 + 显式 LLM 端点；`AGENT_EGRESS_ENFORCE=1` 开启拦截 | `harness/test_deploy_egress.py` |
+| 健康数据加密 | 宝宝敏感字段落库 Fernet 加密（密钥 `AGENT_DATA_ENCRYPTION_KEY`）；生产缺密钥启动即失败 | `harness/test_data_encryption.py` |
+
+> 部署时务必设置 `AGENT_DATA_ENCRYPTION_KEY`（base64 32 字节 Fernet key）与 `AGENT_EGRESS_ENFORCE=1`；
+> 未设加密密钥时开发/mock 用确定性 dev key（仅限非生产数据，启动会告警）。
+
 ## 运行验收
 
 ```bash
-python3 scripts/run_harness.py --all        # 全量回归（CI 门禁，~50s，11/11 绿）
+python3 scripts/run_harness.py --all        # 全量回归（CI 门禁，20/20 绿）
 python3 scripts/run_harness.py --module kb  # 仅某模块
 python3 scripts/run_harness.py --module deploy  # 端侧部署验收
 ```

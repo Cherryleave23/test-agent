@@ -14,3 +14,10 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# 密钥 / 本地环境（MOD-deploy P0-1：凭证仅经 env 注入，禁止提交）
+.env
+.env.local
+.env.*.local
+*.local
+secrets/

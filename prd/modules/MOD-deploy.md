@@ -96,6 +96,9 @@
 - `test_deploy_network.py`：出网白名单可达性校验（ilinkai / CDN 域名）。
 - `test_deploy_env_override.py`：环境变量覆盖 yaml 配置（端侧不改文件即切模式）。
 - `test_deploy_manifest.py`：依赖清单校验（Tier1 URL 可达性 + 校验和 + 模式匹配）。
+- `test_data_encryption.py`（P0-3）：宝宝健康字段落库密文≠明文 + round-trip + 惰性迁移兼容升级前明文行。
+- `test_deploy_egress.py`（P0-2）：出网白名单——默认域名放行 / 强制开启拦截非白名单 / LLM base_url 自动并入 / EXTRA_HOSTS 逃生阀 / 客户端拦截在出网之前。
+- `test_secret_scan.py`（P0-1）：仓库无已提交真实密钥 + `.env*` 被 gitignore + `.env.example` 含关键安全变量（CI 可复用 `scripts/secret_scan.py`）。
 
 ---
 
@@ -105,3 +108,27 @@
 - 升级须保留数据卷并校验兼容性（embedding 模型版本、schema 版本）。
 - 端侧实例需确认可出网 `ilinkai.weixin.qq.com` 等域名，否则 bot 无法轮询消息。
 - 本模块完全自研（方案 B），不 import Hermes。
+
+---
+
+## 九、P0 安全加固（已落地）
+
+上线前必做的三项安全控制，均已实现并配 harness 红跑通过（详见 `harness/test_data_encryption.py` / `test_deploy_egress.py` / `test_secret_scan.py`）。
+
+### P0-1 密钥环境变量化（收尾）
+- `EnterpriseConfig.from_yaml_with_env()` 环境变量覆盖 yaml（端侧不改文件即切模式）。
+- 凭证（`bot_token` / `api_key` / 加密密钥）仅经 `env_file: .env.local` 注入容器，**不内联、不打包进镜像**。
+- `.gitignore` 忽略 `.env*` / `secrets/`；`deploy/.env.example` 为入库模板（无真实密钥）。
+- `scripts/secret_scan.py` 防提交密钥扫描（CI 可挂）。
+
+### P0-2 出入站白名单
+- `src/common/egress.py`：`EgressPolicy` + `AllowedAsyncClient`，应用层出网域名强制。
+- 默认白名单：`ilinkai.weixin.qq.com`（Bot API）+ `novac2c.cdn.weixin.qq.com`（媒体 CDN）；显式配置的 LLM/Embedding `base_url` 主机自动并入。
+- 强制开关 `AGENT_EGRESS_ENFORCE`（默认 `0` 开发透传；部署置 `1` 才拦截）；`AGENT_EGRESS_EXTRA_HOSTS` 逃生阀。
+- 接线点：`src/agent/providers.py`（两处 `httpx.AsyncClient`）、`src/wechat/ilink_client.py`（`_post`）。
+
+### P0-3 健康数据加密
+- `src/common/crypto.py`：`Vault`（Fernet，密钥 `AGENT_DATA_ENCRYPTION_KEY`）。
+- `src/baby/store.py` 在落库边界加密 12 个敏感健康字段（`baby_age`/`gender`/`stage`/`allergens_json`/`budget`/`brand_preference_json`/`category`/`health_notes`/`birth_date`/`gestational_weeks`/`medical_history_json`/`feeding_history_json`）；`name`/`customer_id` 等查询/实体链接必需字段保持明文。
+- 升级前明文行（无 `fernet:` 前缀）惰性兼容；生产/部署模式缺密钥启动即抛错（禁止静默明文落库）。
+- 开发/mock 未设密钥时用确定性 dev key 并发警告（仅限非生产数据）。

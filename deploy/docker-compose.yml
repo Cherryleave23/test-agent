@@ -1,10 +1,18 @@
 # 1 家企业 1 个实例（MOD-deploy，G6）
 # 实例含 iLink bot 凭证，运行期出网 HTTPS 到 ilinkai.weixin.qq.com
+#
+# 凭证注入（P0-1）：bot_token / api_key / 加密密钥等仅经 env_file(.env.local) 注入容器，
+# 不内联、不打包进镜像。.env.local 已被 .gitignore 忽略，禁止提交。
+# 出网白名单（P0-2）：除 Docker 网络隔离(wechat_egress)外，应用层 EgressPolicy 在
+# httpx / iLink 客户端强制仅放通白名单域名（AGENT_EGRESS_ENFORCE=1 时开启）。
 services:
   maternal-agent:
     build: .
     container_name: maternal-agent-${ENTERPRISE_ID:-demo}
     restart: unless-stopped
+    # 凭证 / 安全配置经 env_file 注入（不内联明文）
+    env_file:
+      - .env.local
     environment:
       - ENTERPRISE_ID=${ENTERPRISE_ID:-demo}
     volumes:

@@ -1,7 +1,7 @@
 # STATE.md — 工程状态快照
 
 > 自动生成的项目状态快照，供会话交接 / 上下文压缩使用。
-> 生成时间：2026-07-21 — Head `1216b85` — 全量门禁 **9/9 ALL GREEN**（~50s）
+> 生成时间：2026-07-21 — Head `bc1175e`（ff-only 合并远端 39 文件 +4196/−118）— 全量门禁 **17/17 ALL GREEN**（含 1 个重型模型测试默认 SKIP）
 
 ## 1. 项目定位（不可变约束）
 
@@ -35,9 +35,12 @@ harness/       # 各模块回归脚本
 
 | 模块 | 状态 | 关键 commit | 门禁 |
 |---|---|---|---|
-| MOD-baby-profile | **完成（P1–P23 全绿）** | `a63d2aa`/`25055ea`/`4d154ef`/`46a8737`/`1216b85` | 22/22 (+agent P21/P22) |
+| MOD-baby-profile | **完成（P1–P23 全绿）** | `a63d2aa`/`25055ea`/`4d154ef`/`46a8737`/`1216b85` + 远端 `bc1175e`(D1)/`ea50592`(C1+C2) | 22/22 (+agent P21/P22) |
 | MOD-ingest（P1） | 完成 | `3f5f106` | 8/8 |
 | MOD-session 记忆 | 收敛为 UserConstraints | `64fe970` | — |
+| MOD-agent（A1–A6） | **完成（消息流装配修复）** | `9c91fa8`（+我的 P21/P22） | agent 4/4 |
+| MOD-deploy（新增） | 新增部署管道（Dockerfile/installer/postinstall/manifest） | `bc1175e` 之前批次 | 2 个 deploy harness 全绿 |
+| MOD-插件系统（新增） | 新增 `src/common/plugins.py` + `plugins/manifest.yaml` | — | wiring harness 全绿 |
 | MOD-kb 嵌入缓存 | 未启动（review 建议 D） | — | — |
 | MOD-agent RAG 系统缓存 | 未启动（ROI 高于消歧缓存） | — | — |
 | MOD-deploy 三项 P0 | 未启动（密钥环境变量化/出入站白名单/健康数据加密） | — | — |
@@ -47,7 +50,7 @@ harness/       # 各模块回归脚本
 - **实体**：`Customer`(1→N) + `BabyProfile`（`upsert` 合并、`to_prompt_block`、`merge`）。
 - **消歧**：`resolution.resolve_and_extract`（LLM 实体链接）+ `_rule_extract`（规则属性抽取）。
 - **快速切换/P4**：`_has_baby_signal` 已扩展检查已知宝宝/客户名；`_match_known` 优先 `(customer,baby)` 精确匹配，歧义返回 None。
-- **焦点稳定缓存（优化 B）**：`focus_is_stable(known, focus_baby_id, msg)` 为真 → 跳过 LLM，直接规则抽取归档到焦点宝宝（质量无损，因属性抽取本就规则化）。
+- **焦点稳定缓存（优化 B）**：**已被 D1 废弃**——`focus_is_stable` 现仅保留用于测试/诊断/Mock 省调用（`resolution.py:95`），不再作为"跳过 LLM"的生产路径。原因：规则抽取对相对时间（"1年前3岁"）、开放词汇（"肚子疼"）、隐含推算损失太大；改为**每轮走 LLM**，但用 Prompt Caching（优化 C）降 input token 成本。缓存稳定性结构（焦点移出 system、稳定前缀=指令+known）保留并生效。
 - **数据一致性三项加固**：
   - pending 防污染：`find_baby_by_name` 仅匹配 `confirmed`；`prune_stale_pending(days)` 清理过期。
   - 消歧失败熔断：会话连续失败 ≥3（`session_resolution_fails`）→ 降级仅产品问答 + `logger.warning`。
@@ -57,15 +60,17 @@ harness/       # 各模块回归脚本
 ## 5. 门禁与运行
 
 ```bash
-# 默认（快速，~50s，9/9 绿）
+# 默认（快速，~50s，17/17 绿，含 1 个重型模型测试默认 SKIP）
 python3.11 scripts/run_harness.py
 
 # 含重型模型（~200s+，需显式开启）
 RUN_REAL_MODEL=1 python3.11 scripts/run_harness.py
 ```
 
+- **门禁已扩展**：远端新增 8 个 harness 模块（baby_schema_v2 / cross_context_pollution / query_enrichment / temporal_open_vocab / ultimate_baby_harness / wiring / deploy_env_override / deploy_manifest），总模块数 9 → 17。
+
 - **WAL 已开启**：`PRAGMA journal_mode=WAL`，非裸写。
-- **缓存**：**Prompt Caching 全阶段已落地**（方案 2026-07-21，`1216b85`）：① P0 `list_for_employee` 加 `ORDER BY` 保证 `known_json` 序列化稳定（缓存命中前提）；② 消歧 `resolve_and_extract` 稳定前缀（指令+known）置首 + `cache_control`，切换焦点不破坏缓存；③ 阶段2 `pipeline._build_messages` RAG prompt 稳定企业 prompt 在前、动态检索 context 置尾；④ 阶段3 `providers._report_cache_hit` 解析 `usage.prompt_tokens_details.cached_tokens` 记命中日志；⑤ 阶段4 `agent.warmup.warmup_prompt_cache` 预热。OpenAI 兼容端点靠自动前缀缓存，Anthropic 由 `_apply_cache_control` 显式加 ephemeral 断点。与优化 B（焦点稳定跳过 LLM）互补。
+- **缓存**：**Prompt Caching 全阶段已落地**（方案 2026-07-21，`1216b85`）：① P0 `list_for_employee` 加 `ORDER BY` 保证 `known_json` 序列化稳定（缓存命中前提）；② 消歧 `resolve_and_extract` 稳定前缀（指令+known）置首 + `cache_control`，切换焦点不破坏缓存；③ 阶段2 `pipeline._build_messages` RAG prompt 稳定企业 prompt 在前、动态检索 context 置尾；④ 阶段3 `providers._report_cache_hit` 解析 `usage.prompt_tokens_details.cached_tokens` 记命中日志；⑤ 阶段4 `agent.warmup.warmup_prompt_cache` 预热。OpenAI 兼容端点靠自动前缀缓存，Anthropic 由 `_apply_cache_control` 显式加 ephemeral 断点。**注意（2026-07-21 远端 D1）**：优化 B 的"焦点稳定整轮跳过 LLM"已废弃，改为每轮走 LLM 但带 `cache_control`——缓存仍是成本主降点。
 
 ## 6. 待办与决策记录
 
@@ -80,6 +85,25 @@ RUN_REAL_MODEL=1 python3.11 scripts/run_harness.py
 - **Git 鉴权**：`GITHUB_TOKEN`/`GH_TOKEN` 在 `~/.bashrc` + credential helper；非登录 shell 需手动 `GITHUB_TOKEN="$(...)" git push`。
 - **commit 引用陷阱**：`git commit --amend` 改 hash 会令 README 死链；改用**独立 docs commit** 指向稳定父 hash。
 - **对话级压缩不可行**：只能落盘快照（本文件）实现"持久化压缩"。
+
+## 8. 近期拉取合并记录（2026-07-21，ff-only，39 文件 +4196/−118）
+
+- **HEAD**：`da8bbb3`（我 Prompt Caching 末次推送）→ `bc1175e`。
+- **三个修复提交（叠加在我改动之上，未冲突）**：
+  - `bc1175e` **D1**：移除 focus_is_stable 规则短路路径，每轮走 LLM（LLM 既判归属又抽属性）；`_parse_resolution` 空 JSON 默认 `action=chat`；规则抽取降级为 LLM 失败兜底。
+  - `ea50592` **C1+C2**：focus_is_stable 无宝宝信号返回 False（原 True 致跨上下文污染）+ `resolve_and_extract` 无信号不抽属性；`_validate_extracted` 合理性校验（`baby_age>6`/未来生日/过早生日拒绝）；`_BABY_SIGNALS` 补 `\d\s*段`。
+  - `9c91fa8` **A1–A6**：端侧 BabyProfileStore 装配、网关传 baby_profile 使检索融合生效、约束压缩合并、焦点切换刷新约束、约束从档案派生、LLM 指数退避重试。
+- **新增子系统**：`deploy/`（Dockerfile + dependency-manifest + installer/postinstall PowerShell）、`plugins/`（src/common/plugins.py 382 行 + manifest.yaml）、`src/baby/archive.py`/`models.py`、`src/common/config.py`/`embeddings.py`/`rerank.py` 增强。
+- **我的 Prompt Caching 改动核验**：`resolution.py` cache_control 在 `424` 行 intact；`providers.py` `_apply_cache_control`/`_report_cache_hit` intact（远端还把函数名写进 docstring）；`pipeline.py` P21 RAG 顺序 intact；`warmup.py` 在；`store.py` ORDER BY 在。
+- **结论**：合并后 17/17 ALL GREEN，Prompt Caching 基础设施全部生效；优化 B 被 D1 废弃但缓存（优化 C）成为成本主降点。未修改/提交任何文件，仅核验 + 更新本快照。
+
+## 9. 回溯端点（GitHub tag，不可变）
+
+- **端点 `snapshot-bc1175e`**：注解 tag，精确指向拉取版本 `bc1175e`（`fix baby D1/C1+C2 + agent A1-A6`），已 `git push origin snapshot-bc1175e` 推到 `Cherryleave23/test-agent`。
+- **不可变性**：tag 是固定指针；后续 `git push origin main`（上传新版本）只移动 `main`，不改动本 tag。唯一改写方式是 `git push --force origin snapshot-bc1175e`（刻意避免）。
+- **回溯用法**：`git checkout snapshot-bc1175e`（游离 HEAD 查看）/ `git branch rollback-xxx snapshot-bc1175e`（从端点拉分支）/ GitHub 上切到该 tag 浏览。
+- **凭证注意**：非交互 shell 不会自动 source `~/.bashrc`；推送需在同一条命令里 `TOK=$(grep GITHUB_TOKEN ~/.bashrc|tail -1|sed -E 's/.*=//; s/["'"'"' ]//g'); export GITHUB_TOKEN="$TOK"; git push ...`（系统凭证助手 `/root/.git-credential-env.sh` 读 `$GITHUB_TOKEN`）。
+- **新建端点流程**：`git tag -a <name> <commit> -m "..."` → `git push origin <name>`。命名建议 `snapshot-<date>-<short-sha>` 或语义名 `release-vX.Y.Z`，避免复用同名 tag（那才会改端点）。
 
 ---
 *本文件为状态快照，非 PRD。改动后以最新 HEAD + 门禁结果为准。*

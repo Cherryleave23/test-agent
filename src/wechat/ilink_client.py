@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from common.config import WechatConfig
+from common.egress import get_policy
 
 
 @dataclass
@@ -40,6 +41,7 @@ class ILinkClient:
     def __init__(self, cfg: WechatConfig):
         self.cfg = cfg
         self._backoff_until = 0.0
+        get_policy().allow(self.cfg.base_url)  # 端侧合法出网端点并入白名单
 
     def _headers(self) -> dict:
         return {
@@ -51,6 +53,7 @@ class ILinkClient:
 
     def _post(self, path: str, payload: dict) -> dict:
         url = f"{self.cfg.base_url.rstrip('/')}/{path.lstrip('/')}"
+        get_policy().assert_allowed(url)  # P0-2 出网白名单（强制开启时拦截非白名单域名）
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=self._headers(), method="POST")
         try:
