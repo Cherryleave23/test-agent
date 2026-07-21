@@ -1,7 +1,8 @@
 # STATE.md — 工程状态快照
 
 > 自动生成的项目状态快照，供会话交接 / 上下文压缩使用。
-> 生成时间：2026-07-21 — Head `bc1175e`（ff-only 合并远端 39 文件 +4196/−118）— 全量门禁 **17/17 ALL GREEN**（含 1 个重型模型测试默认 SKIP）
+> 生成时间：2026-07-21 — Head `d86b190`（ff-only 合并 + P0 安全加固 + 回归修复）— 全量门禁 **20/20 ALL GREEN**（含 1 个重型模型测试默认 SKIP）
+> 回溯端点 `snapshot-bc1175e` 固定在 `bc1175e`，不被后续 main 推送影响。
 
 ## 1. 项目定位（不可变约束）
 
@@ -40,10 +41,10 @@ harness/       # 各模块回归脚本
 | MOD-session 记忆 | 收敛为 UserConstraints | `64fe970` | — |
 | MOD-agent（A1–A6） | **完成（消息流装配修复）** | `9c91fa8`（+我的 P21/P22） | agent 4/4 |
 | MOD-deploy（新增） | 新增部署管道（Dockerfile/installer/postinstall/manifest） | `bc1175e` 之前批次 | 2 个 deploy harness 全绿 |
+| MOD-deploy 三项 P0 | **已落地**（密钥环境变量化 / 出入站白名单 / 健康数据加密） | `a572940`（加固）+ `d86b190`（回归修复） | 3 个新 deploy harness 全绿 |
 | MOD-插件系统（新增） | 新增 `src/common/plugins.py` + `plugins/manifest.yaml` | — | wiring harness 全绿 |
 | MOD-kb 嵌入缓存 | 未启动（review 建议 D） | — | — |
 | MOD-agent RAG 系统缓存 | 未启动（ROI 高于消歧缓存） | — | — |
-| MOD-deploy 三项 P0 | 未启动（密钥环境变量化/出入站白名单/健康数据加密） | — | — |
 
 ## 4. 宝宝档案模块关键设计（已落地）
 
@@ -67,7 +68,7 @@ python3.11 scripts/run_harness.py
 RUN_REAL_MODEL=1 python3.11 scripts/run_harness.py
 ```
 
-- **门禁已扩展**：远端新增 8 个 harness 模块（baby_schema_v2 / cross_context_pollution / query_enrichment / temporal_open_vocab / ultimate_baby_harness / wiring / deploy_env_override / deploy_manifest），总模块数 9 → 17。
+- **门禁已扩展**：远端新增 8 个 harness 模块（baby_schema_v2 / cross_context_pollution / query_enrichment / temporal_open_vocab / ultimate_baby_harness / wiring / deploy_env_override / deploy_manifest），总模块数 9 → 17；P0 安全加固再增 3 个（test_data_encryption / test_deploy_egress / test_secret_scan），总模块数 17 → 20。
 
 - **WAL 已开启**：`PRAGMA journal_mode=WAL`，非裸写。
 - **缓存**：**Prompt Caching 全阶段已落地**（方案 2026-07-21，`1216b85`）：① P0 `list_for_employee` 加 `ORDER BY` 保证 `known_json` 序列化稳定（缓存命中前提）；② 消歧 `resolve_and_extract` 稳定前缀（指令+known）置首 + `cache_control`，切换焦点不破坏缓存；③ 阶段2 `pipeline._build_messages` RAG prompt 稳定企业 prompt 在前、动态检索 context 置尾；④ 阶段3 `providers._report_cache_hit` 解析 `usage.prompt_tokens_details.cached_tokens` 记命中日志；⑤ 阶段4 `agent.warmup.warmup_prompt_cache` 预热。OpenAI 兼容端点靠自动前缀缓存，Anthropic 由 `_apply_cache_control` 显式加 ephemeral 断点。**注意（2026-07-21 远端 D1）**：优化 B 的"焦点稳定整轮跳过 LLM"已废弃，改为每轮走 LLM 但带 `cache_control`——缓存仍是成本主降点。
@@ -78,7 +79,7 @@ RUN_REAL_MODEL=1 python3.11 scripts/run_harness.py
 |---|---|
 | 消歧/全链路 Prompt Caching（优化 C + 全阶段） | **已实施**（`46a8737` 消歧前缀 + `1216b85` 全阶段：ORDER BY / RAG顺序 / 命中监控 / 预热） |
 | MOD-kb 嵌入缓存 | 中等收益，独立模块（未启动） |
-| MOD-deploy 三项 P0 | 上线前必做，超出 baby 范围（未启动） |
+| MOD-deploy 三项 P0 | **已落地**（`a572940`：密钥环境变量化 / 出入站白名单 / 健康数据加密；`d86b190`：修复 scanner 误报回归） |
 
 ## 7. 环境要点（避坑）
 
@@ -104,6 +105,21 @@ RUN_REAL_MODEL=1 python3.11 scripts/run_harness.py
 - **回溯用法**：`git checkout snapshot-bc1175e`（游离 HEAD 查看）/ `git branch rollback-xxx snapshot-bc1175e`（从端点拉分支）/ GitHub 上切到该 tag 浏览。
 - **凭证注意**：非交互 shell 不会自动 source `~/.bashrc`；推送需在同一条命令里 `TOK=$(grep GITHUB_TOKEN ~/.bashrc|tail -1|sed -E 's/.*=//; s/["'"'"' ]//g'); export GITHUB_TOKEN="$TOK"; git push ...`（系统凭证助手 `/root/.git-credential-env.sh` 读 `$GITHUB_TOKEN`）。
 - **新建端点流程**：`git tag -a <name> <commit> -m "..."` → `git push origin <name>`。命名建议 `snapshot-<date>-<short-sha>` 或语义名 `release-vX.Y.Z`，避免复用同名 tag（那才会改端点）。
+
+## 10. MOD-deploy 三项 P0 安全加固（2026-07-21，`a572940` + 回归修复 `d86b190`）
+
+上线前必做，配套 3 个真实 harness（CVC：配套 harness + 全绿才算完成）：
+
+1. **P0-1 密钥环境变量化**：`.env.local` 注入（`docker-compose.yml` `env_file`），`deploy/.env.example` 为模板（无真实密钥）；`scripts/secret_scan.py` 扫描已提交真实密钥（sk-/github_pat_/ghp_/xoxb-），CI 退出码非零即拦截。`harness/test_secret_scan.py` 4 检查（S1 当前仓库洁净 / S2 env 模板含变量 / S3 临时仓库真实密钥必检出 / S4 .gitignore 忽略 .env*）。
+2. **P0-2 出入站白名单**：`src/common/egress.py` —— `EgressPolicy`（enforce 默认 0 透传、1 拦截）+ `AllowedAsyncClient`（包装 `httpx.AsyncClient`，send 前 `assert_allowed`）。`AGENT_EGRESS_ENFORCE` 开关、`AGENT_EGRESS_EXTRA_HOSTS` 逃生舱；provider/ilink 的 `base_url` 自动并入白名单。`harness/test_deploy_egress.py` 7 检查。
+3. **P0-3 健康数据加密**：`src/common/crypto.py` `Vault`（Fernet AES-128-CBC+HMAC-SHA256，key 为 base64 字符串）；`src/baby/store.py` 对 12 个敏感健康字段 `_enc`/`_dec`（name/customer_id/enterprise_id/employee_id/status 保持明文用于实体链接/查询）。`get_vault()` 单例 + `reset_vault()` 测试用。`AGENT_DATA_ENCRYPTION_KEY` 缺省用确定性 dev key（仅开发，prod 缺 key 抛 `KeyMissing`）。`harness/test_data_encryption.py` 6 检查。
+
+### 10.1 真实 harness 挖出的回归（CVC 验证不自我报告的价值）
+
+- 用户要求"做一次真实的 harness 测试"。运行 `python3.11 scripts/run_harness.py` 得 **19/20**：`test_secret_scan.py` S1 失败——提交 `a572940` 后该测试文件被 git 跟踪，其 S3 内联的占位密钥字符串 `sk-realkey1234567890abcdef` 被 scanner 自身误报。
+- 根因：scanner 扫全部 `git ls-files`，未豁免测试路径；提交前该文件未跟踪故 20/20，提交后触发自引用误报。
+- 修复（`d86b190`）：`secret_scan.py` 新增 `_is_test_path`（匹配 `/harness/`、`test_` 前缀、`_test.py`、`harness/` 前缀）并在扫描循环跳过。**真实密钥检出能力未被削弱**——S3 仍用临时 git 仓库 `leak.txt`（非测试路径）独立证明。
+- 结论：真实运行将"看似全绿"的假象暴露为回归；修复后 **20/20 ALL GREEN**，已 `git push origin main`（`bc1175e..d86b190`，tag `snapshot-bc1175e` 不受影响）。
 
 ---
 *本文件为状态快照，非 PRD。改动后以最新 HEAD + 门禁结果为准。*
