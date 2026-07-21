@@ -91,6 +91,30 @@
 > 零破坏论证：`baby_block` 为可选形参、默认 `None`；网关仅在 `baby_profile_enabled` 且 `baby_store` 非 None 时接线；
 > `MockProvider` 忽略 system prompt → 注入档案块不改 Mock 回答；既有 8 套测试不受影响（默认门禁 9/9 绿）。
 
+### P2-v2 档案 schema 扩展 + 检索查询融合（2026-07-21）
+
+> 来源：真实宝宝档案（共青二宝，14 个月，早产 35 周）模拟评估发现的 6 项缺陷中，修复前 4 项、推迟 2 项早产行为逻辑。
+
+**修复（must-have）：**
+- **Fix#1（P0）检索查询融合档案上下文**：`pipeline.answer()` 在调用 `store.retrieve()` 前，用焦点宝宝的 `baby_age`/`stage`/`allergens`/`brand_preference`/`category`/`health_notes`/`medical_history`/`feeding_history` 增强原始查询，提升 KB 命中率。新增 `_enrich_query(query, baby_profile)` 方法；`answer()` 新增可选 `baby_profile` 参数（向后兼容）。
+- **Fix#2（P0）`gestational_weeks` 字段**：`BabyProfile` 新增 `gestational_weeks: Optional[int]`（孕周，如 35）。结构化存储，为后续矫正月龄计算预留。更新 `to_prompt_block()`/`merge()`/`is_empty_attr()` + SQL 迁移 + LLM 抽取 schema。
+- **Fix#3（P0）`birth_date` 字段**：`BabyProfile` 新增 `birth_date: str`（ISO 格式，如 "2025-05-21"）。解决 `baby_age` 字符串随时间过期问题。同上更新全链路。
+- **Fix#4（P1）`health_notes` 拆分**：`BabyProfile` 新增 `medical_history: List[str]`（医疗史，如 "早产35周" "出生5.18斤" "新生儿科9天"）+ `feeding_history: List[str]`（喂养史，如 "混合喂养→纯奶粉" "合生元派星3段" "非喷射性吐奶至4-5个月已缓解"）。保留 `health_notes` 字段向后兼容（自由文本兜底）。`to_prompt_block()` 优先展示结构化字段。
+
+**推迟（deferred，记录待后续迭代）：**
+- **Deferred#5（P1）system prompt 矫正月龄指令**：检测到 `gestational_weeks < 37` 时，在 system prompt 中追加「该宝宝为早产儿，辅食/营养建议请按矫正月龄（实足月龄 - (40 - 孕周) / 4）评估」指令。字段已就位（Fix#2），但行为逻辑推迟——需医学顾问审核指令措辞。
+- **Deferred#6（P1）早产专项安全门**：检测到早产时追加「早产儿辅食添加需咨询儿科医生」专项告警（而非仅通用 DISCLAIMER）。推迟原因同上，需医学审核。
+
+**harness 验收：**
+| 编号 | 验收点 | 结果 |
+|------|--------|------|
+| P24 | `birth_date`/`gestational_weeks` 字段 round-trip | PASS |
+| P25 | `medical_history`/`feeding_history` 列表 round-trip + merge 去重 | PASS |
+| P26 | SQL 迁移：旧库 ALTER TABLE 自动加列 | PASS |
+| P27 | `to_prompt_block()` 含新字段 | PASS |
+| P28 | `_enrich_query()` 融合档案上下文 | PASS |
+| P29 | `answer()` 传 baby_profile 时用增强查询检索 | PASS |
+
 ---
 
 ## 一、数据模型

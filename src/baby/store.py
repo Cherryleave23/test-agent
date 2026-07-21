@@ -71,6 +71,16 @@ class BabyProfileStore:
                 CREATE INDEX IF NOT EXISTS idx_customers_emp ON customers(enterprise_id, employee_id);
                 """
             )
+            # P2-v2 迁移：为旧库自动添加新列（SQLite ALTER TABLE ADD COLUMN）
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(babies)").fetchall()}
+            if "birth_date" not in cols:
+                conn.execute("ALTER TABLE babies ADD COLUMN birth_date TEXT")
+            if "gestational_weeks" not in cols:
+                conn.execute("ALTER TABLE babies ADD COLUMN gestational_weeks INTEGER")
+            if "medical_history_json" not in cols:
+                conn.execute("ALTER TABLE babies ADD COLUMN medical_history_json TEXT")
+            if "feeding_history_json" not in cols:
+                conn.execute("ALTER TABLE babies ADD COLUMN feeding_history_json TEXT")
             conn.commit()
 
     # ------------------------------------------------------------------
@@ -115,13 +125,17 @@ class BabyProfileStore:
             cur = conn.execute(
                 """INSERT INTO babies(enterprise_id, employee_id, customer_id, name,
                    baby_age, gender, stage, allergens_json, budget, brand_preference_json,
-                   category, health_notes, status, created_at, updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   category, health_notes, status, created_at, updated_at,
+                   birth_date, gestational_weeks, medical_history_json, feeding_history_json)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (baby.enterprise_id, baby.employee_id, baby.customer_id, baby.name,
                  baby.baby_age, baby.gender, baby.stage,
                  json.dumps(baby.allergens, ensure_ascii=False),
                  baby.budget, json.dumps(baby.brand_preference, ensure_ascii=False),
-                 baby.category, baby.health_notes, baby.status, time.time(), time.time()),
+                 baby.category, baby.health_notes, baby.status, time.time(), time.time(),
+                 baby.birth_date, baby.gestational_weeks,
+                 json.dumps(baby.medical_history, ensure_ascii=False),
+                 json.dumps(baby.feeding_history, ensure_ascii=False)),
             )
             conn.commit()
             return cur.lastrowid
@@ -149,6 +163,10 @@ class BabyProfileStore:
             brand_preference=json.loads(row["brand_preference_json"] or "[]"),
             category=row["category"] or "",
             health_notes=row["health_notes"] or "",
+            birth_date=row["birth_date"] or "",
+            gestational_weeks=row["gestational_weeks"],
+            medical_history=json.loads(row["medical_history_json"] or "[]"),
+            feeding_history=json.loads(row["feeding_history_json"] or "[]"),
             status=row["status"] or "pending",
         )
 
@@ -163,11 +181,18 @@ class BabyProfileStore:
                 conn.execute(
                     """UPDATE babies SET customer_id=?, name=?, baby_age=?, gender=?, stage=?,
                        allergens_json=?, budget=?, brand_preference_json=?, category=?,
-                       health_notes=?, status=?, updated_at=? WHERE baby_id=?""",
+                       health_notes=?, status=?, updated_at=?,
+                       birth_date=?, gestational_weeks=?,
+                       medical_history_json=?, feeding_history_json=?
+                       WHERE baby_id=?""",
                     (merged.customer_id, merged.name, merged.baby_age, merged.gender,
                      merged.stage, json.dumps(merged.allergens, ensure_ascii=False),
                      merged.budget, json.dumps(merged.brand_preference, ensure_ascii=False),
-                     merged.category, merged.health_notes, merged.status, time.time(), baby_id),
+                     merged.category, merged.health_notes, merged.status, time.time(),
+                     merged.birth_date, merged.gestational_weeks,
+                     json.dumps(merged.medical_history, ensure_ascii=False),
+                     json.dumps(merged.feeding_history, ensure_ascii=False),
+                     baby_id),
                 )
                 conn.commit()
             return merged
@@ -195,11 +220,18 @@ class BabyProfileStore:
                 conn.execute(
                     """UPDATE babies SET customer_id=?, name=?, baby_age=?, gender=?, stage=?,
                        allergens_json=?, budget=?, brand_preference_json=?, category=?,
-                       health_notes=?, status=?, updated_at=? WHERE baby_id=?""",
+                       health_notes=?, status=?, updated_at=?,
+                       birth_date=?, gestational_weeks=?,
+                       medical_history_json=?, feeding_history_json=?
+                       WHERE baby_id=?""",
                     (merged.customer_id, merged.name, merged.baby_age, merged.gender,
                      merged.stage, json.dumps(merged.allergens, ensure_ascii=False),
                      merged.budget, json.dumps(merged.brand_preference, ensure_ascii=False),
-                     merged.category, merged.health_notes, merged.status, time.time(), target_id),
+                     merged.category, merged.health_notes, merged.status, time.time(),
+                     merged.birth_date, merged.gestational_weeks,
+                     json.dumps(merged.medical_history, ensure_ascii=False),
+                     json.dumps(merged.feeding_history, ensure_ascii=False),
+                     target_id),
                 )
                 conn.execute("DELETE FROM babies WHERE baby_id=?", (source_id,))
                 conn.commit()

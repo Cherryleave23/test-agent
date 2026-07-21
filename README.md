@@ -50,8 +50,9 @@
 | `1216b85` | **Prompt Caching 全阶段落地** | P0 `list_for_employee` ORDER BY（序列化稳定）；阶段2 pipeline RAG prompt 稳定在前/动态 context 在后；阶段3 `_report_cache_hit` 命中日志；阶段4 `warmup_prompt_cache` 预热 | baby P18–P20/P23 + agent P21/P22 全绿 |
 | `a63d2aa` | **门禁提速治理** | 重型真实模型测试（`test_real_embed_bend`/`test_reranker` 的 RR3/RR4）改用 `RUN_REAL_MODEL=1` 显式开关隔离，默认门禁跳过 → 9/9 绿且 ~50s | 默认门禁 9/9 ALL GREEN，重型测试 opt-in 仍 7/7、4/4 均绿 |
 | `feat(deploy)` | **P1 端侧部署 Windows 直装 + 依赖分层** | 三层依赖（Tier1 URL拉取/Tier2 捆绑/Tier3 可插拔）+ `dependency-manifest.yaml` 声明式清单 + `configure.ps1` 交互式配置向导 + `from_yaml_with_env()` 环境变量覆盖 + `PluginManager` 可插拔模型路径 + requirements 双轨拆分 | deploy 18 断言全绿 |
+| `feat(baby-v2)` | **P2-v2 档案 schema 扩展 + 检索查询融合** | `birth_date`/`gestational_weeks`/`medical_history`/`feeding_history` 结构化字段 + SQL 自动迁移 + `_enrich_query()` 检索查询融合档案上下文 + LLM 消歧器抽取新字段 | baby P24-P27 + agent P28-P29 共 13 断言全绿 |
 
-> **全量门禁：11/11 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
+> **全量门禁：13/13 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
 > 设 `RUN_REAL_MODEL=1` 并加 `--timeout 600` 可显式运行（bge 语义嵌入弯曲 7/7、真实重排 4/4 均绿）。
 
 ### 模块实现状态
@@ -59,9 +60,9 @@
 |------|------|------|
 | MOD-knowledge-ingest | **partial（P1 已落地）** | 统一接口 + 真实爬虫 + 归一管线已交付；PDF/OCR 适配器 deferred（non-goal） |
 | MOD-kb | partial | 分块/嵌入/向量检索 + 独立重排器已跑通真实嵌入 |
-| MOD-agent | partial | RAG 核心 + 每企业可配置 LLM + 约束块注入 + **Prompt Caching（RAG prompt 顺序 + 命中监控 + 预热）** 已落地 |
+| MOD-agent | partial | RAG 核心 + 每企业可配置 LLM + 约束块注入 + **Prompt Caching（RAG prompt 顺序 + 命中监控 + 预热）** + **检索查询融合档案上下文（`_enrich_query`）** 已落地 |
 | MOD-session | **partial（P1 已落地）** | 三级隔离 + 用户约束累积/压缩已交付 |
-| MOD-baby-profile | **partial（P2 已落地 + 数据一致性加固 + 优化 B/C + Prompt Caching 全阶段）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 / 焦点稳定结果缓存 / Prompt Caching 稳定前缀 + ORDER BY + 预热 |
+| MOD-baby-profile | **partial（P2 + P2-v2 已落地）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 / 焦点稳定结果缓存 / Prompt Caching 稳定前缀 + ORDER BY + 预热；**schema v2: `birth_date`/`gestational_weeks`/`medical_history`/`feeding_history` 结构化字段 + SQL 自动迁移** |
 | MOD-wechat | partial | iLink Bot API 网关 + 约束/档案接线已落地 |
 | MOD-deploy | **partial（P1 已落地）** | **Windows 直装 + 三层依赖分层（Tier1 URL拉取/Tier2 捆绑/Tier3 可插拔）+ `configure.ps1` 配置向导 + 环境变量覆盖 + `PluginManager` 可插拔模型路径** 已落地 |
 

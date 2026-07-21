@@ -16,6 +16,7 @@ from typing import List, Dict, Optional
 from common.config import EnterpriseConfig
 from kb.store import KnowledgeStore, CorpusHit
 from agent.providers import ProviderFactory
+from baby.models import BabyProfile
 
 
 DISCLAIMER = "（温馨提示：以上为产品信息参考，不构成医疗诊断，如有健康问题请咨询专业医生。）"
@@ -80,11 +81,42 @@ class Agent:
         msgs.append({"role": "user", "content": query})
         return msgs
 
+    def _enrich_query(self, query: str, baby_profile: Optional[BabyProfile] = None) -> str:
+        """用宝宝档案上下文增强检索查询，提升 KB 命中率（Fix#1）。
+
+        原始查询（如"该吃什么辅食"）过于泛化，KB 中"14个月辅食""早产宝宝辅食"等内容
+        会因查询不含这些关键词而漏检。本方法把焦点宝宝的月龄/段位/过敏/品牌/品类/病史
+        等拼入查询，使检索能命中更精准的文档。
+        """
+        if baby_profile is None:
+            return query
+        parts = [query]
+        bp = baby_profile
+        if bp.baby_age:
+            parts.append(bp.baby_age)
+        if bp.stage:
+            parts.append(bp.stage)
+        if bp.allergens:
+            parts.extend(bp.allergens)
+        if bp.brand_preference:
+            parts.extend(bp.brand_preference)
+        if bp.category:
+            parts.append(bp.category)
+        if bp.medical_history:
+            parts.extend(bp.medical_history)
+        if bp.feeding_history:
+            parts.extend(bp.feeding_history)
+        if bp.health_notes and not (bp.medical_history or bp.feeding_history):
+            parts.append(bp.health_notes)
+        return " ".join(parts)
+
     async def answer(self, query: str, history: List[Dict[str, str]] = None,
-                    constraints=None, baby_block: Optional[str] = None) -> Answer:
+                    constraints=None, baby_block: Optional[str] = None,
+                    baby_profile: Optional[BabyProfile] = None) -> Answer:
         history = history or []
-        # 1) 检索
-        hits = self.store.retrieve(query, self.cfg.enterprise_id, top_k=5)
+        # 1) 检索（Fix#1：用档案上下文增强查询，提升命中率）
+        enriched_query = self._enrich_query(query, baby_profile)
+        hits = self.store.retrieve(enriched_query, self.cfg.enterprise_id, top_k=5)
         # 2) 拼接上下文
         context = self._build_context(hits)
         # 3) 企业 prompt（含可选用户约束块 / 宝宝档案块）
