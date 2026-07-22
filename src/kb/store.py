@@ -27,6 +27,10 @@ from kb.models import MilkProduct, NutritionProduct
 HQ_ENT = "hq"  # Chroma metadata 中 HQ 共享库的 enterprise_id 标记
 
 
+class ReadonlyError(Exception):
+    """试图删除/改写 HQ（厂商分发只读）语料时抛出。"""
+
+
 def _fts_tokenize(text: str) -> List[str]:
     """FTS5 索引 / 查询统一分词：英文数字词 + 命中的母婴复合词（不含单字）。
 
@@ -142,11 +146,13 @@ class KnowledgeStore:
                          meta: Optional[dict] = None) -> int:
         # 分区已由 corpus.part='hq_kb' 承担，meta 不再冗余写 kind='hq_kb'，
         # 改由调用方写入内容类型 kind（article/ingredient 等），避免与新契约 kind 语义撞车（F1）。
+        # F2：HQ 为厂商分发共享库，实例侧只读 —— 只读性由分区（ent='hq'）保证，
+        # delete_corpus/update_corpus 经 _row_readonly 拒绝改写（不污染内容型 meta）。
+        hq_meta = dict(meta or {})
         with connect(self.db_path) as conn:
             cur = conn.cursor()
             cid = self._add_corpus(
-                cur, "hq_kb", HQ_ENT, None, title, content,
-                meta or {},
+                cur, "hq_kb", HQ_ENT, None, title, content, hq_meta,
             )
             conn.commit()
             return cid
@@ -229,6 +235,76 @@ class KnowledgeStore:
             conn.commit()
             return pid
 
+    # ---------- 写：HQ 只读护栏（F2）----------
+    @staticmethod
+    def _row_readonly(row) -> bool:
+        """判定某 corpus 行是否只读：HQ 共享库（ent=hq）或 meta.readonly=true。"""
+        if row["enterprise_id"] == HQ_ENT:
+            return True
+        try:
+            return bool(json.loads(row["meta_json"] or "{}").get("readonly"))
+        except Exception:
+            return False
+
+    def delete_corpus(self, cid: int) -> None:
+        """删除一条语料。HQ（厂商分发只读）行拒绝删除（F2）。"""
+        with connect(self.db_path) as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT enterprise_id, meta_json FROM corpus WHERE id=?", (cid,)
+            ).fetchone()
+            if row is None:
+                return
+            if self._row_readonly(row):
+                raise ReadonlyError(
+                    "HQ 知识库为厂商分发只读，实例不可删除（enterprise_id=hq 或 meta.readonly=true）"
+                )
+            cur.execute("DELETE FROM fts_corpus WHERE rowid=?", (cid,))
+            cur.execute("DELETE FROM corpus WHERE id=?", (cid,))
+            conn.commit()
+        try:
+            self.collection.delete(ids=[str(cid)])
+        except Exception:
+            pass  # Chroma 缺该 id 不阻塞
+
+    def update_corpus(self, cid: int, title: Optional[str] = None,
+                      content: Optional[str] = None,
+                      meta: Optional[dict] = None) -> None:
+        """改写一条语料。HQ（厂商分发只读）行拒绝改写（F2）。
+
+        厂商重分发仍走 add_hq_knowledge（vendor 路径），不受本护栏限制。
+        """
+        with connect(self.db_path) as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT enterprise_id, meta_json, part, product_id, chunk, title, content "
+                "FROM corpus WHERE id=?", (cid,)
+            ).fetchone()
+            if row is None:
+                return
+            if self._row_readonly(row):
+                raise ReadonlyError(
+                    "HQ 知识库为厂商分发只读，实例不可改写（enterprise_id=hq 或 meta.readonly=true）"
+                )
+            new_title = title if title is not None else row["title"]
+            new_content = content if content is not None else row["content"]
+            new_meta = row["meta_json"]
+            if meta is not None:
+                m = json.loads(row["meta_json"] or "{}")
+                m.update(meta)
+                new_meta = json.dumps(m, ensure_ascii=False)
+            cur.execute(
+                "UPDATE corpus SET title=?, content=?, meta_json=? WHERE id=?",
+                (new_title, new_content, new_meta, cid),
+            )
+            cur.execute("DELETE FROM fts_corpus WHERE rowid=?", (cid,))
+            conn.commit()
+        # 重新索引（chroma upsert + fts 插入）；在连接外调用 chroma 安全
+        self._index(
+            None, cid, new_title, new_content, row["enterprise_id"], row["part"],
+            product_id=row["product_id"], chunk=row["chunk"] or "",
+        )
+
     def _add_corpus(self, cur, part, ent, product_id, title, text, meta,
                     chunk: str = "", chunk_index: int = 0) -> int:
         cur.execute(
@@ -254,10 +330,19 @@ class KnowledgeStore:
                         "product_id": pid_meta, "chunk": chunk}],
         )
         # SQLite FTS5 关键词索引（字级 token 化，CJK 可命中）
-        cur.execute(
-            "INSERT INTO fts_corpus(rowid, title, content) VALUES(?,?,?)",
-            (cid, title, self.fts_text(title, content)),
-        )
+        # cur=None 时（如 update_corpus 在连接外重索引）自建连接写入
+        if cur is None:
+            with connect(self.db_path) as _c:
+                _c.execute(
+                    "INSERT INTO fts_corpus(rowid, title, content) VALUES(?,?,?)",
+                    (cid, title, self.fts_text(title, content)),
+                )
+                _c.commit()
+        else:
+            cur.execute(
+                "INSERT INTO fts_corpus(rowid, title, content) VALUES(?,?,?)",
+                (cid, title, self.fts_text(title, content)),
+            )
 
     # ---------- 读：混合检索（Chroma 向量 + FTS5 关键词，RRF）----------
     # 相关性阈值门控：向量相似度低于阈值视为「无相关信息」，防止跨域幻觉（RAG 标准做法）。
