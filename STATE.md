@@ -1,7 +1,7 @@
 # STATE.md — 工程状态快照
 
 > 自动生成的项目状态快照，供会话交接 / 上下文压缩使用。
-> 生成时间：2026-07-21 — Head `d86b190`（ff-only 合并 + P0 安全加固 + 回归修复）+ 本地未推送提交（F2 只读护栏 + F3 kind 路由 + F4 bundle 加载器/触发 + F5 pending 确认数据侧）— 全量门禁 **30/30 ALL GREEN**（含 1 个重型模型测试默认 SKIP；F1/F2/F3/F4/F5/F6 store+importer 修复 + P5 GUI 工作台 + P2 OCR 适配器 + P3 结构化抽取/实体解析 均已落地回归）
+> 生成时间：2026-07-21 — Head `ae4592c`（F2/F3/F4/F5 + Tauri 构建配置固化，已推送 origin/main）— 全量门禁 **30/30 ALL GREEN**（含 1 个重型模型测试默认 SKIP；F1/F2/F3/F4/F5/F6 store+importer 修复 + P5 GUI 工作台 + P2 OCR 适配器 + P3 结构化抽取/实体解析 均已落地回归；所有本地提交已推送远端）
 > 回溯端点 `snapshot-bc1175e` 固定在 `bc1175e`，不被后续 main 推送影响。
 
 ## 1. 项目定位（不可变约束）
@@ -81,7 +81,7 @@ RUN_REAL_MODEL=1 python3.11 scripts/run_harness.py
 | MOD-kb 嵌入缓存 | 中等收益，独立模块（未启动） |
 | MOD-deploy 三项 P0 | **已落地**（`a572940`：密钥环境变量化 / 出入站白名单 / 健康数据加密；`d86b190`：修复 scanner 误报回归） |
 | Tauri 桌面壳真实打包 | **代码侧已补全、环境门控**：`icons/icon.png` 生成 + `pnpm-workspace.yaml` 补齐（`pnpm --filter` 解析失败已修）+ `VITE_API_BASE` 接线验证正确 + 前端 `vite build` 链验证通过；真实 `pnpm tauri build` 需打包机装 `webkit2gtk-4.1`（系统依赖，沙箱无，未跑通非代码缺陷，README 已给构建机一键清单） |
-| 本地提交领先 origin/main | 14 个提交未推送（`7b19f82`..`HEAD`），`git push` 受 `test-agent` GitHub 凭证缺失阻塞（见 §7 Git 鉴权） |
+| 本地提交已推送 origin/main | 全部提交（含 F2/F3/F4/F5 + Tauri 配置固化，`ae4592c`）已通过一次性 PAT 推送到 `Cherryleave23/test-agent`；§7 Git 鉴权仅作通用说明，本次推送凭证为会话内临时提供 |
 
 ## 7. 环境要点（避坑）
 
