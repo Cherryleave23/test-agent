@@ -180,6 +180,62 @@ class KnowledgeStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    # ---------- 读/写：待确认商品（F5 数据侧基础）----------
+    # pending 判定列：奶粉用注册号 reg_number，营养品用批准文号 health_license
+    _PENDING_COL = {"products_milk": "reg_number", "products_nutrition": "health_license"}
+
+    def list_pending_products(self, enterprise_id: str) -> List[dict]:
+        """列出本企业「待确认」商品（奶粉 reg_number 空 / 营养品 health_license 空）。
+
+        供微信侧「待确认列表」展示；确认后写对应批准号即不再 pending。
+        """
+        out: List[dict] = []
+        for tbl, col in self._PENDING_COL.items():
+            with connect(self.db_path) as conn:
+                for r in conn.execute(
+                    f"SELECT id, name, brand, {col} FROM {tbl} "
+                    f"WHERE enterprise_id=? AND ({col} IS NULL OR {col}='')",
+                    (enterprise_id,),
+                ).fetchall():
+                    d = dict(r)
+                    d["table"] = tbl
+                    d["pending_key"] = col
+                    out.append(d)
+        return out
+
+    def confirm_product(self, product_id: int, value: str,
+                        table: str = "products_milk") -> None:
+        """确认 pending 商品：写入对应批准号（奶粉 reg_number / 营养品 health_license）。"""
+        if table not in self._PENDING_COL:
+            raise ValueError(f"未知商品表: {table}")
+        col = self._PENDING_COL[table]
+        with connect(self.db_path) as conn:
+            conn.execute(
+                f"UPDATE {table} SET {col}=? WHERE id=?",
+                (value, product_id),
+            )
+            conn.commit()
+
+    def delete_product(self, product_id: int, table: str = "products_milk") -> None:
+        """删除商品及其绑定的语料分块（b_milk/b_nutrition，按 product_id）。"""
+        if table not in ("products_milk", "products_nutrition"):
+            raise ValueError(f"未知商品表: {table}")
+        with connect(self.db_path) as conn:
+            cur = conn.cursor()
+            ids = [r["id"] for r in cur.execute(
+                "SELECT id FROM corpus WHERE product_id=?", (product_id,)).fetchall()]
+            if ids:
+                ph = ",".join("?" * len(ids))
+                cur.execute(f"DELETE FROM fts_corpus WHERE rowid IN ({ph})", ids)
+            cur.execute("DELETE FROM corpus WHERE product_id=?", (product_id,))
+            cur.execute(f"DELETE FROM {table} WHERE id=?", (product_id,))
+            conn.commit()
+        for i in ids:
+            try:
+                self.collection.delete(ids=[str(i)])
+            except Exception:
+                pass
+
     # ---------- 写：企业自有 RAG 知识（采集归一后的文本源：web/text/pdf/...）----------
     def add_knowledge(self, enterprise_id: str, title: str, content: str,
                      meta: Optional[dict] = None, product_id: Optional[int] = None) -> int:
