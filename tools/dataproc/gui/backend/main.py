@@ -149,9 +149,20 @@ def do_process(name: str = Form(...), selection: str = Form(None),
 @app.get("/bundle")
 def get_bundle(name: str):
     repo_dir, _meta = repos.get_repo(name)
+
+    # 检查自定义输出目录（settings.output_dir）或默认位置
+    s = _load_gui_settings()
+    out_dir = s.get("output_dir") or ""
+    if out_dir:
+        bp = os.path.join(out_dir, "manifest.json")
+        if os.path.isfile(bp):
+            with open(bp, encoding="utf-8") as f:
+                return JSONResponse(json.load(f), media_type="application/json")
+
+    # 默认位置
     bp = os.path.join(repo_dir, ".dataproc", "bundle", "manifest.json")
     if not os.path.isfile(bp):
-        raise HTTPException(status_code=404, detail="尚未生成 bundle")
+        raise HTTPException(status_code=404, detail="尚未生成 bundle，请先点击处理")
     with open(bp, encoding="utf-8") as f:
         return JSONResponse(json.load(f), media_type="application/json")
 
