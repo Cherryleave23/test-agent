@@ -138,23 +138,28 @@ class KnowledgeStore:
             conn.commit()
 
     # ---------- 写：HQ 知识库 ----------
-    def add_hq_knowledge(self, title: str, content: str) -> int:
+    def add_hq_knowledge(self, title: str, content: str,
+                         meta: Optional[dict] = None) -> int:
+        # 分区已由 corpus.part='hq_kb' 承担，meta 不再冗余写 kind='hq_kb'，
+        # 改由调用方写入内容类型 kind（article/ingredient 等），避免与新契约 kind 语义撞车（F1）。
         with connect(self.db_path) as conn:
             cur = conn.cursor()
             cid = self._add_corpus(
                 cur, "hq_kb", HQ_ENT, None, title, content,
-                {"kind": "hq_kb"},
+                meta or {},
             )
             conn.commit()
             return cid
 
     # ---------- 写：企业自有 RAG 知识（采集归一后的文本源：web/text/pdf/...）----------
     def add_knowledge(self, enterprise_id: str, title: str, content: str,
-                     meta: Optional[dict] = None) -> int:
+                     meta: Optional[dict] = None, product_id: Optional[int] = None) -> int:
+        # product_id: 绑定具体商品的结构化主键（corpus 中 product_text/ingredient 用），
+        # 供 importer 把 bundle 的 product_uid 解析为 product_id（F1）。
         with connect(self.db_path) as conn:
             cur = conn.cursor()
             cid = self._add_corpus(
-                cur, "b_kb", enterprise_id, None, title, content,
+                cur, "b_kb", enterprise_id, product_id, title, content,
                 meta or {},
             )
             conn.commit()

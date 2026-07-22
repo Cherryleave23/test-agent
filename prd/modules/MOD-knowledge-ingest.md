@@ -237,7 +237,7 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 1. **`load_bundle(bundle_dir, store, enterprise_id)`**：
    - 校验 `manifest.json`（`schema_version`、校验和、`enterprise_id == 运行实例` 否则拒绝）；
    - 读 `products.ndjson` → 由 `fields` 构建 `MilkProduct`/`NutritionProduct`（补 `enterprise_id`）→ `store.add_milk`/`add_nutrition`；记录 `uid→product_id` 映射；
-   - 读 `corpus.ndjson` → 按 `part` 路由 sink：`b_kb`→`store.add_knowledge`、`hq_kb`→`store.add_hq_knowledge`；按 `kind`（`product_text`/`article`/`ingredient`）写入 `meta.kind` 标签供 KB 过滤/溯源；仅当语料绑定商品（`product_text` 或 `ingredient` 且 `part=b_kb`）时解析 `product_uid→product_id` 并写入 `meta.product_id`，主题级 `article` 与通识 `ingredient`（`hq_kb`、无 `product_uid`）不绑定商品；
+   - 读 `corpus.ndjson` → 按 `part` 路由 sink：`b_kb`→`store.add_knowledge`、`hq_kb`→`store.add_hq_knowledge`；按 `kind`（`product_text`/`article`/`ingredient`）写入 `meta.kind` 标签供 KB 过滤/溯源；仅当语料绑定商品（`product_text` 或 `ingredient` 且 `part=b_kb`）时解析 `product_uid→product_id` 并写入 `meta.product_id`，主题级 `article` 与通识 `ingredient`（`hq_kb`、无 `product_uid`）不绑定商品；（**store 已修复 F1**：`add_hq_knowledge` 现接受 `meta` 且不再硬编码 `kind='hq_kb'`；`add_knowledge` 现接受 `product_id`，由 `corpus.part` 列承担分区，`meta.kind` 专留内容类型）
    - 读 `hq_products.ndjson` → onboarding 播种（HQ 商品表 + HQ 共享库）。
 2. **幂等**：复用 `ingest_dedup` 内容哈希去重，重载同一 bundle 安全（不重复入库、不重复向量）。
 3. **企业隔离**：`manifest.enterprise_id` 必须 == 运行实例 `enterprise_id`，否则拒绝加载（隔离兜底）。
@@ -357,6 +357,7 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 | I7–I16 | PDF / OCR 适配器（**决策已定，见「〇·P2」**：PaddleOCR + PP-Structure / 端侧可选安装 / `RUN_REAL_OCR=1` 门控） | `test_dataproc_pdf` / `test_dataproc_ocr` | ⏸ 计划 P2（落地后转已落地） |
 | RES1–RES7 | 结构化抽取 + 实体解析 + 分类（**见「〇·P3」**，工具侧） | `test_dataproc_resolver` | ⏸ 计划 P3 |
 | IMP1–IMP6 | agent 端导入器加载 bundle → store → retrieve 命中（**见「〇·P4」**，隔离边界） | `test_importer` | ⏸ 计划 P4 |
+| F1 | `store.add_knowledge`/`add_hq_knowledge` 签名支持 `product_id`+`meta.kind`，hq 不再硬编码 `kind='hq_kb'` | `test_store_corpus_kind` | ✅ 已落地（F1 修复，corpus kind 语义去撞） |
 
 ---
 
@@ -366,3 +367,18 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 - 不得把采集到的原文直接当「已验证知识」——入库前标注来源与采集时间。
 - 首版**不实现**结构化 API 适配器；若后续需要，作为新适配器扩充，不动核心与知识库逻辑。
 - 本模块完全自研（方案 B），不 import Hermes。
+
+---
+
+## 九、落地待办（使用流程评估发现，2026-07）
+
+> 对「数据整理使用部分」做端到端流程评估后，发现如下阻塞/缺口。F1 已在 `src/kb/store.py` 修复并配 `harness/test_store_corpus_kind.py` 锁定；其余随 P4/P5 落地。
+
+| 编号 | 级别 | 缺口 | 状态 / 处置 |
+|------|------|------|------|
+| **F1** | 🔴已修 | `store.meta.kind` 语义与新契约 `kind` 撞车 + `add_hq_knowledge` 无 meta 形参、`add_knowledge` 无 `product_id` 形参，P4 importer 无法落 `kind`/绑定商品 | ✅ 已修 `store.py`（add_hq_knowledge 加 `meta`、去硬编码 `kind`；add_knowledge 加 `product_id`）+ 回归 `harness/test_store_corpus_kind.py`（F1a–F1d 全绿） |
+| **F2** | 🟠高 | `hq_kb`「厂商分发/实例只读」未强制：仅 `enterprise_id=HQ_ENT` 写同表，无 readonly 标志/编辑护栏 | P4 落地时补：meta 打 `readonly=true` + 删除/改写 API 拒绝 HQ 行（或独立 HQ 分区表） |
+| **F3** | 🟠高 | retrieve 侧未用 `meta.kind` 路由/加权：产品问答 vs 育儿知识 vs 成分机制未分流 | 跨模块：MOD-agent 检索逻辑按 `kind` 过滤/加权（Chroma metadata 已带 `part`/`product_id`，需补 `kind`） |
+| **F4** | 🟡中 | bundle 运输 + 触发未定义：工具产包 → 送达企业端 agent 实例 → 谁触发 `load_bundle` | 明确：vendor 运维产包 / 企业 IT 拷包 / agent 启动扫目录 / 或微信管理指令 |
+| **F5** | 🟡中 | `pending` 商品确认 UX 未定义：resolver 产 `status=pending`，员工在 agent 端确认/合并/删除流未闭环 | 微信侧 pending 列表展示 + 确认动作流（可并入 MOD-wechat 管理指令） |
+| **F6** | 🔴新发现 | `retrieve` 第 4 步回查 `if enterprise_id is not None and != 运行实例: continue` 把 `hq_kb` 行（ent=`"hq"`）**全部丢弃**，导致 HQ 共享库跨企业实际不可读，Chroma `where` 联合 `HQ_ENT` 成死代码 | 修复二选一：① `add_hq_knowledge` 存 `enterprise_id=NULL`（同表、`part` 区分）；② 回查步骤放行 `HQ_ENT`。需与 F2 只读策略一并定 |
