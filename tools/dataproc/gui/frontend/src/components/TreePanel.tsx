@@ -1,10 +1,19 @@
-import React, { useState } from "react";
+import React, { useState, useCallback, useRef } from "react";
+import ContextMenu from "./ContextMenu";
 
 interface TreeData {
   path: string;
   folders: { name: string; path: string }[];
   files: { name: string; path: string; size: number }[];
   top_folders: string[];
+}
+
+interface MenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  path: string;
+  isFolder: boolean;
 }
 
 interface Props {
@@ -19,126 +28,240 @@ interface Props {
   onSelectAll: () => void;
   onMkdir: (parentPath: string, folderName: string) => void;
   onRmdir: (folderPath: string) => void;
+  onDeleteFile?: (filePath: string) => void;
+  onPreviewFile?: (path: string) => void;
+  onOpenExplorer?: (path: string) => void;
+  onMoveItem?: (srcPath: string, dstFolder: string) => void;
 }
 
-function breadcrumb(path: string): { name: string; path: string }[] {
-  const parts = path.split("/").filter(Boolean);
-  const out: { name: string; path: string }[] = [];
-  let acc = "";
-  for (const p of parts) {
-    acc = acc ? acc + "/" + p : p;
-    out.push({ name: p, path: acc });
-  }
-  return out;
+function formatSize(n: number) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+/** 构建嵌套树结构 */
+function buildTree(folders: { name: string; path: string }[], files: { name: string; path: string; size: number }[]) {
+  const root: any = { name: "", path: "", children: [], files: [] };
+  const map: Record<string, any> = { "": root };
+
+  (folders || []).forEach((f) => {
+    if (!f || !f.path) return;
+    const parts = f.path.split("/");
+    let parentPath = parts.slice(0, -1).join("/");
+    if (!map[parentPath]) map[parentPath] = { name: "", path: parentPath, children: [], files: [] };
+    map[parentPath].children.push({ name: f.name, path: f.path, children: [], files: [] });
+  });
+
+  (files || []).forEach((f) => {
+    if (!f || !f.path) return;
+    const parts = f.path.split("/");
+    let parentPath = parts.slice(0, -1).join("/");
+    if (!map[parentPath]) map[parentPath] = { name: "", path: parentPath, children: [], files: [] };
+    map[parentPath].files.push(f);
+  });
+
+  return root.children;
 }
 
 export default function TreePanel({
-  tree,
-  currentFolder,
-  selFiles,
-  selFolders,
-  processedPaths,
-  onNavigate,
-  onToggleFile,
-  onToggleFolder,
-  onSelectAll,
-  onMkdir,
-  onRmdir,
+  tree, currentFolder, selFiles, selFolders, processedPaths,
+  onNavigate, onToggleFile, onToggleFolder, onSelectAll, onMkdir, onRmdir,
+  onDeleteFile, onPreviewFile, onOpenExplorer, onMoveItem,
 }: Props) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [menu, setMenu] = useState<MenuState>({
+    visible: false, x: 0, y: 0, path: "", isFolder: false,
+  });
+  const [dragSrc, setDragSrc] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+  const [mkdirName, setMkdirName] = useState("");
   const [showMkdir, setShowMkdir] = useState(false);
-  const [newFolderName, setNewFolderName] = useState("");
 
-  if (!tree) return <aside className="tree">（请先选择仓库）</aside>;
+  const treeRef = useRef<HTMLDivElement>(null);
 
-  const crumbs = [{ name: "仓库根", path: "" }, ...breadcrumb(currentFolder)];
+  const toggleExpand = useCallback((path: string) => {
+    setExpanded((s) => {
+      const n = new Set(s);
+      n.has(path) ? n.delete(path) : n.add(path);
+      return n;
+    });
+  }, []);
 
-  const submitMkdir = () => {
-    if (!newFolderName.trim()) return;
-    onMkdir(currentFolder, newFolderName.trim());
-    setNewFolderName("");
-    setShowMkdir(false);
+  const handleContextMenu = (e: React.MouseEvent, path: string, isFolder: boolean) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ visible: true, x: e.clientX, y: e.clientY, path, isFolder });
   };
 
+  const menuItems = [
+    ...(menu.isFolder && onOpenExplorer
+      ? [{ label: "在资源管理器中打开", action: () => onOpenExplorer(menu.path) }]
+      : []),
+    ...(onOpenExplorer && !menu.isFolder
+      ? [{ label: "在资源管理器中打开", action: () => onOpenExplorer(menu.path) }]
+      : []),
+    ...(menu.isFolder
+      ? [{ label: "删除文件夹", action: () => onRmdir(menu.path), danger: true }]
+      : onDeleteFile
+      ? [{ label: "删除文件", action: () => onDeleteFile(menu.path), danger: true }]
+      : []),
+  ];
+
+  const handleDragStart = (e: React.DragEvent, path: string) => {
+    setDragSrc(path);
+    e.dataTransfer.setData("text/plain", path);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent, folderPath: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragSrc && dragSrc !== folderPath && !dragSrc.startsWith(folderPath + "/")) {
+      setDragOver(folderPath);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, folderPath: string) => {
+    e.preventDefault();
+    setDragOver(null);
+    const src = e.dataTransfer.getData("text/plain") || dragSrc;
+    if (src && src !== folderPath && !src.startsWith(folderPath + "/") && onMoveItem) {
+      onMoveItem(src, folderPath);
+    }
+    setDragSrc(null);
+  };
+
+  const handleDragLeave = () => {
+    setDragOver(null);
+  };
+
+  const renderFolder = (f: any, depth: number) => {
+    const isExpanded = expanded.has(f.path);
+    const isDragOver = dragOver === f.path;
+    const hasChildren = f.children.length > 0 || f.files.length > 0;
+
+    return (
+      <li key={f.path}>
+        <div
+          className={`tree-row folder-row ${isDragOver ? "drag-over" : ""}`}
+          style={{ paddingLeft: depth * 18 + 6 }}
+          draggable
+          onDragStart={(e) => handleDragStart(e, f.path)}
+          onDragOver={(e) => handleDragOver(e, f.path)}
+          onDrop={(e) => handleDrop(e, f.path)}
+          onDragLeave={handleDragLeave}
+          onContextMenu={(e) => handleContextMenu(e, f.path, true)}
+        >
+          <span
+            className={`tree-arrow ${hasChildren ? "" : "invisible"} ${isExpanded ? "open" : ""}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (hasChildren) toggleExpand(f.path);
+            }}
+          />
+          <span
+            className={`tree-name ${selFolders.has(f.path) ? "selected" : ""}`}
+            onClick={() => {
+              onToggleFolder(f.path);
+              onNavigate(f.path);
+              if (hasChildren) toggleExpand(f.path);
+            }}
+          >
+            {f.name}
+          </span>
+        </div>
+        {isExpanded && hasChildren && (
+          <ul className="tree-children">
+            {f.children.map((child: any) => renderFolder(child, depth + 1))}
+            {f.files.map((file: any) => renderFile(file, depth + 1))}
+          </ul>
+        )}
+      </li>
+    );
+  };
+
+  const renderFile = (f: any, depth: number) => {
+    const isProcessed = processedPaths.has(f.path);
+    return (
+      <li key={f.path}>
+        <div
+          className="tree-row file-row"
+          style={{ paddingLeft: depth * 18 + 24 }}
+          draggable
+          onDragStart={(e) => handleDragStart(e, f.path)}
+          onContextMenu={(e) => handleContextMenu(e, f.path, false)}
+        >
+          <span
+            className={`tree-name ${selFiles.has(f.path) ? "selected" : ""}`}
+            onClick={() => onToggleFile(f.path)}
+            onDoubleClick={() => onPreviewFile && onPreviewFile(f.path)}
+            title="双击预览"
+          >
+            {f.name}
+            {isProcessed && <span className="processed-dot" title="已处理">●</span>}
+          </span>
+          <span className="tree-size">{formatSize(f.size)}</span>
+        </div>
+      </li>
+    );
+  };
+
+  const rootNodes = tree ? buildTree(tree.folders, tree.files) : [];
+
   return (
-    <aside className="tree">
+    <div className="tree" ref={treeRef}>
       <div className="tree-head">
         <span>资料树</span>
         <div className="tree-actions">
-          <button onClick={() => setShowMkdir((v) => !v)} title="在当前文件夹下新建子文件夹">
-            + 文件夹
-          </button>
-          <button onClick={onSelectAll} disabled={!tree.files.length}>
-            全选当前
-          </button>
+          <button onClick={onSelectAll}>全选</button>
+          <button onClick={() => setShowMkdir(true)}>新建文件夹</button>
         </div>
       </div>
       {showMkdir && (
         <div className="mkdir-bar">
           <input
-            placeholder="新文件夹名"
-            value={newFolderName}
-            onChange={(e) => setNewFolderName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitMkdir()}
+            placeholder="文件夹名"
+            value={mkdirName}
+            onChange={(e) => setMkdirName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && mkdirName.trim()) {
+                onMkdir(currentFolder, mkdirName.trim());
+                setMkdirName("");
+                setShowMkdir(false);
+              }
+            }}
+            autoFocus
           />
-          <button onClick={submitMkdir}>创建</button>
+          <button
+            onClick={() => {
+              if (mkdirName.trim()) {
+                onMkdir(currentFolder, mkdirName.trim());
+                setMkdirName("");
+                setShowMkdir(false);
+              }
+            }}
+          >
+            创建
+          </button>
+          <button onClick={() => { setShowMkdir(false); setMkdirName(""); }}>取消</button>
         </div>
       )}
-      <nav className="crumbs">
-        {crumbs.map((c, i) => (
-          <span key={c.path}>
-            {i > 0 && " / "}
-            <a onClick={() => onNavigate(c.path)}>{c.name}</a>
-          </span>
-        ))}
-      </nav>
-      <ul className="folders">
-        {tree.folders.map((f) => (
-          <li key={f.path} className="folder">
-            <input
-              type="checkbox"
-              checked={selFolders.has(f.path)}
-              onChange={() => onToggleFolder(f.path)}
-              title="选中整个文件夹（递归处理）"
-            />
-            <span className="ficon">📁</span>
-            <a onClick={() => onNavigate(f.path)}>{f.name}</a>
-            <button
-              className="folder-del-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (confirm(`确认删除文件夹「${f.name}」及其所有内容？`)) {
-                  onRmdir(f.path);
-                }
-              }}
-              title="删除文件夹"
-            >
-              ✕
-            </button>
-          </li>
-        ))}
-        {!tree.folders.length && <li className="empty">（无子文件夹）</li>}
-      </ul>
-      <ul className="files">
-        {tree.files.map((f) => {
-          const isProcessed = processedPaths.has(f.path);
-          return (
-            <li key={f.path} className="file">
-              <input
-                type="checkbox"
-                checked={selFiles.has(f.path)}
-                onChange={() => onToggleFile(f.path)}
-              />
-              <span className="ficon">📄</span>
-              <span>{f.name}</span>
-              {isProcessed && (
-                <span className="processed-dot" title="已处理">●</span>
-              )}
-              <span className="fsize">{(f.size / 1024).toFixed(1)}KB</span>
-            </li>
-          );
-        })}
-        {!tree.files.length && <li className="empty">（无文件）</li>}
-      </ul>
-    </aside>
+      {tree ? (
+        <ul className="tree-list">
+          {rootNodes.map((f: any) => renderFolder(f, 0))}
+          {tree.files.map((f) => renderFile(f, 0))}
+        </ul>
+      ) : (
+        <div className="empty">暂无仓库</div>
+      )}
+      <ContextMenu
+        visible={menu.visible}
+        x={menu.x}
+        y={menu.y}
+        items={menuItems}
+        onClose={() => setMenu({ visible: false, x: 0, y: 0, path: "", isFolder: false })}
+      />
+    </div>
   );
 }

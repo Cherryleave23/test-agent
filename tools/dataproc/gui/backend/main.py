@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, FileResponse
 
 from . import repos, tree, upload, markers, process as proc, progress
 from .models import RepoCreate, SettingsUpdate
+import subprocess
 
 # 配置日志：确保 info 级别日志输出到控制台
 logging.basicConfig(
@@ -115,6 +116,66 @@ def make_dir(name: str = Form(...), parent_path: str = Form(""), folder_name: st
 def remove_dir(name: str = Form(...), folder_path: str = Form(...)):
     try:
         return tree.rmdir(name, folder_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/tree/file")
+def remove_file(name: str = Form(...), file_path: str = Form(...)):
+    try:
+        return tree.delete_file(name, file_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/tree/move")
+def move_item(name: str = Form(...), src_path: str = Form(...), dst_folder: str = Form("")):
+    try:
+        return tree.move(name, src_path, dst_folder)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.get("/file_content")
+def file_content(name: str, path: str):
+    try:
+        return tree.read_file(name, path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/open_explorer")
+def open_explorer(name: str, path: str = ""):
+    """在系统资源管理器中打开指定路径（文件夹或文件所在目录）。"""
+    try:
+        repo_dir, _meta = repos.get_repo(name)
+        target = os.path.normpath(os.path.join(repo_dir, path)) if path else repo_dir
+        if not (target == repo_dir or target.startswith(repo_dir + os.sep)):
+            raise ValueError("非法路径（越界）")
+        if not os.path.exists(target):
+            raise FileNotFoundError("路径不存在")
+        # 打开文件夹，或文件所在目录并选中文件
+        if os.path.isfile(target):
+            if os.name == "nt":
+                subprocess.run(["explorer", "/select,", target])
+            else:
+                subprocess.run(["open", "-R", target])
+        else:
+            if os.name == "nt":
+                subprocess.run(["explorer", target])
+            else:
+                subprocess.run(["open", target])
+        return {"opened": target}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:

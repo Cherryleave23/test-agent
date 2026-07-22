@@ -82,3 +82,86 @@ def rmdir(name: str, folder_path: str, base: str = None) -> dict:
     shutil.rmtree(target)
     rel = os.path.relpath(target, repo_dir).replace(os.sep, "/")
     return {"path": rel, "deleted": True}
+
+
+def delete_file(name: str, file_path: str, base: str = None) -> dict:
+    """删除单个文件。
+
+    Args:
+        name: 仓库名
+        file_path: 要删除的文件相对路径
+    Returns:
+        {"path": rel_path, "deleted": True}
+    """
+    repo_dir, _meta = get_repo(name, base)
+    target = os.path.normpath(os.path.join(repo_dir, file_path))
+    if not target.startswith(repo_dir + os.sep):
+        raise ValueError("非法路径（越界）")
+    if not os.path.isfile(target):
+        raise FileNotFoundError("文件不存在")
+    os.remove(target)
+    rel = os.path.relpath(target, repo_dir).replace(os.sep, "/")
+    return {"path": rel, "deleted": True}
+
+
+def move(name: str, src_path: str, dst_folder: str, base: str = None) -> dict:
+    """移动文件或文件夹到目标文件夹。
+
+    Args:
+        name: 仓库名
+        src_path: 源文件/文件夹相对路径
+        dst_folder: 目标文件夹相对路径（空=仓库根）
+    Returns:
+        {"src": rel_src, "dst": rel_dst}
+    """
+    import shutil
+    repo_dir, _meta = get_repo(name, base)
+    src = os.path.normpath(os.path.join(repo_dir, src_path))
+    dst_parent = os.path.join(repo_dir, dst_folder) if dst_folder else repo_dir
+    dst_parent = os.path.normpath(dst_parent)
+
+    if not (src.startswith(repo_dir + os.sep) or src == repo_dir):
+        raise ValueError("非法源路径（越界）")
+    if not (dst_parent == repo_dir or dst_parent.startswith(repo_dir + os.sep)):
+        raise ValueError("非法目标路径（越界）")
+    if not os.path.exists(src):
+        raise FileNotFoundError("源文件/文件夹不存在")
+    if not os.path.isdir(dst_parent):
+        raise FileNotFoundError("目标文件夹不存在")
+
+    basename = os.path.basename(src)
+    dst = os.path.join(dst_parent, basename)
+    if os.path.exists(dst):
+        raise FileExistsError(f"目标位置已存在同名项: {basename}")
+
+    shutil.move(src, dst)
+    rel_src = os.path.relpath(src, repo_dir).replace(os.sep, "/")
+    rel_dst = os.path.relpath(dst, repo_dir).replace(os.sep, "/")
+    return {"src": rel_src, "dst": rel_dst}
+
+
+def read_file(name: str, file_path: str, base: str = None) -> dict:
+    """读取文件内容（仅限 .md/.txt）。
+
+    Args:
+        name: 仓库名
+        file_path: 文件相对路径
+    Returns:
+        {"name": filename, "content": text, "size": bytes}
+    """
+    repo_dir, _meta = get_repo(name, base)
+    target = os.path.normpath(os.path.join(repo_dir, file_path))
+    if not target.startswith(repo_dir + os.sep):
+        raise ValueError("非法路径（越界）")
+    if not os.path.isfile(target):
+        raise FileNotFoundError("文件不存在")
+    ext = os.path.splitext(target)[1].lower()
+    if ext not in (".md", ".txt"):
+        raise ValueError("仅支持 .md/.txt 文件预览")
+    with open(target, encoding="utf-8") as f:
+        content = f.read()
+    return {
+        "name": os.path.basename(target),
+        "content": content,
+        "size": os.path.getsize(target),
+    }

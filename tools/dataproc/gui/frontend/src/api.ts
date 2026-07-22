@@ -74,4 +74,21 @@ export const api = {
   getSettings: () => req("GET", "/settings"),
   updateSettings: (data: any) => req("POST", "/settings", data),
   getReposBase: () => req("GET", "/repos/base"),
+  deleteFile: (name: string, filePath: string) => {
+    const fd = new FormData();
+    fd.append("name", name);
+    fd.append("file_path", filePath);
+    return req("DELETE", "/tree/file", fd, true);
+  },
+  moveItem: (name: string, srcPath: string, dstFolder: string) => {
+    const fd = new FormData();
+    fd.append("name", name);
+    fd.append("src_path", srcPath);
+    fd.append("dst_folder", dstFolder);
+    return req("POST", "/tree/move", fd, true);
+  },
+  fileContent: (name: string, path: string) =>
+    req("GET", `/file_content?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`),
+  openExplorer: (name: string, path: string) =>
+    req("GET", `/open_explorer?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`),
 };

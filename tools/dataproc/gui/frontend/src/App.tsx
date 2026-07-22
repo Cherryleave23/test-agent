@@ -6,6 +6,7 @@ import DropZone from "./components/DropZone";
 import ProcessPanel from "./components/ProcessPanel";
 import LogPanel from "./components/LogPanel";
 import ProcessedPanel from "./components/ProcessedPanel";
+import PreviewPanel from "./components/PreviewPanel";
 import SettingsPanel from "./components/SettingsPanel";
 
 interface RepoList {
@@ -54,6 +55,12 @@ export default function App() {
     output_dir: "",
     repos_base: "",
   });
+  // 文件预览状态
+  const [previewName, setPreviewName] = useState<string | null>(null);
+  const [previewContent, setPreviewContent] = useState<string>("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+
   const pollRef = useRef<number | null>(null);
 
   const processedPaths = new Set(
@@ -88,7 +95,6 @@ export default function App() {
     }
   }, []);
 
-  // 更新当前仓库的 output_dir（优先仓库级，其次全局 settings）
   const updateOutputDir = useCallback((repoName: string) => {
     const repo = repoList.repos.find((r) => r.name === repoName);
     if (repo?.output_dir) {
@@ -111,7 +117,7 @@ export default function App() {
     });
   }, []);
 
-  // 处理状态轮询（提升到 App 层，供 ProcessPanel 和 LogPanel 共享）
+  // 处理状态轮询
   useEffect(() => {
     if (!busy) {
       if (pollRef.current) {
@@ -121,27 +127,19 @@ export default function App() {
       api.processStatus().then(setProcStatus).catch(() => {});
       return;
     }
-
     const poll = async () => {
       try {
         const s = await api.processStatus();
         setProcStatus(s);
         if (s.status !== "running") {
-          if (pollRef.current) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
-          }
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
         }
       } catch {}
     };
     poll();
     pollRef.current = window.setInterval(poll, 1500);
-
     return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     };
   }, [busy]);
 
@@ -170,26 +168,14 @@ export default function App() {
   const navigate = (path: string) => loadTree(current, path);
 
   const toggleFile = (path: string) =>
-    setSelFiles((s) => {
-      const n = new Set(s);
-      n.has(path) ? n.delete(path) : n.add(path);
-      return n;
-    });
+    setSelFiles((s) => { const n = new Set(s); n.has(path) ? n.delete(path) : n.add(path); return n; });
 
   const toggleFolder = (path: string) =>
-    setSelFolders((s) => {
-      const n = new Set(s);
-      n.has(path) ? n.delete(path) : n.add(path);
-      return n;
-    });
+    setSelFolders((s) => { const n = new Set(s); n.has(path) ? n.delete(path) : n.add(path); return n; });
 
   const selectAllInCurrent = () => {
     if (!tree) return;
-    setSelFiles((s) => {
-      const n = new Set(s);
-      tree.files.forEach((f) => n.add(f.path));
-      return n;
-    });
+    setSelFiles((s) => { const n = new Set(s); tree.files.forEach((f) => n.add(f.path)); return n; });
   };
 
   const onMkdir = async (parentPath: string, folderName: string) => {
@@ -198,9 +184,7 @@ export default function App() {
       await api.mkdir(current, parentPath, folderName);
       setMsg(`文件夹「${folderName}」已创建`);
       await loadTree(current, currentFolder);
-    } catch (e: any) {
-      setMsg("创建文件夹失败：" + e.message);
-    }
+    } catch (e: any) { setMsg("创建文件夹失败：" + e.message); }
   };
 
   const onRmdir = async (folderPath: string) => {
@@ -209,9 +193,50 @@ export default function App() {
       await api.rmdir(current, folderPath);
       setMsg(`文件夹已删除`);
       await loadTree(current, currentFolder);
+    } catch (e: any) { setMsg("删除文件夹失败：" + e.message); }
+  };
+
+  const onDeleteFile = async (filePath: string) => {
+    if (!current) return;
+    try {
+      await api.deleteFile(current, filePath);
+      setMsg(`文件已删除`);
+      await loadTree(current, currentFolder);
+      if (previewName === filePath) { setPreviewName(null); setPreviewContent(""); }
+    } catch (e: any) { setMsg("删除文件失败：" + e.message); }
+  };
+
+  const onPreviewFile = async (path: string) => {
+    if (!current) return;
+    setPreviewLoading(true);
+    setPreviewError("");
+    setPreviewName(path);
+    try {
+      const data = await api.fileContent(current, path);
+      setPreviewContent(data.content || "");
     } catch (e: any) {
-      setMsg("删除文件夹失败：" + e.message);
+      setPreviewError(e.message || "预览失败");
+      setPreviewContent("");
+    } finally {
+      setPreviewLoading(false);
     }
+  };
+
+  const onOpenExplorer = async (path: string) => {
+    if (!current) return;
+    try {
+      await api.openExplorer(current, path);
+    } catch (e: any) { setMsg("打开资源管理器失败：" + e.message); }
+  };
+
+  const onMoveItem = async (srcPath: string, dstFolder: string) => {
+    if (!current) return;
+    try {
+      await api.moveItem(current, srcPath, dstFolder);
+      setMsg(`已移动 ${srcPath} → ${dstFolder}`);
+      await loadTree(current, currentFolder);
+      if (previewName === srcPath) setPreviewName(null);
+    } catch (e: any) { setMsg("移动失败：" + e.message); }
   };
 
   const onFiles = async (files: File[]) => {
@@ -229,11 +254,8 @@ export default function App() {
       }
       setMsg(`已上传 ${uploaded} 个文件到 ${currentFolder || "根目录"}`);
       await loadTree(current, currentFolder);
-    } catch (e: any) {
-      setMsg("上传失败：" + e.message);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e: any) { setMsg("上传失败：" + e.message); }
+    finally { setBusy(false); }
   };
 
   const onOsPaths = async (paths: string[]) => {
@@ -249,55 +271,35 @@ export default function App() {
       }
       setMsg(`已从系统拖入 ${paths.length} 个文件`);
       await loadTree(current, currentFolder);
-    } catch (e: any) {
-      setMsg("系统拖入处理失败：" + e.message);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e: any) { setMsg("系统拖入处理失败：" + e.message); }
+    finally { setBusy(false); }
   };
 
   const doProcess = async (full: boolean, force: boolean) => {
     if (!current) return;
-    const selection = full
-      ? null
-      : { files: [...selFiles], folders: [...selFolders] };
+    const selection = full ? null : { files: [...selFiles], folders: [...selFolders] };
     setBusy(true);
     setMsg(full ? "全量处理中…" : "选择性处理中…");
     try {
       const resp = await api.process(current, selection, force, currentOutputDir || "");
-
       if (resp.status === "started") {
         setMsg(`处理已启动：${resp.total} 个文件（跳过 ${resp.skipped} 个已处理）`);
         const poll = async (): Promise<void> => {
           const s = await api.processStatus();
-          if (s.status === "running") {
-            await new Promise((r) => setTimeout(r, 1500));
-            return poll();
-          }
-          return;
+          if (s.status === "running") { await new Promise((r) => setTimeout(r, 1500)); return poll(); }
         };
         await poll();
         const final = await api.processStatus();
-        if (final.status === "error") {
-          setMsg("处理失败：" + final.error);
-        } else {
-          const procCount = final.processed || 0;
-          const skipCount = final.skipped || 0;
-          setMsg(`处理完成：${procCount} 个文件，跳过 ${skipCount} 个`);
-        }
+        if (final.status === "error") { setMsg("处理失败：" + final.error); }
+        else { setMsg(`处理完成：${final.processed || 0} 个文件，跳过 ${final.skipped || 0} 个`); }
       } else if (resp.status === "done") {
-        setMsg(`全部跳过：${resp.skipped} 个文件已处理且内容未变。勾选「强制重新处理」可重新处理。`);
+        setMsg(`全部跳过：${resp.skipped} 个文件已处理且内容未变。`);
       } else {
-        const procCount = resp.processed_files?.length || 0;
-        const skipCount = resp.skipped || 0;
-        setMsg(`处理完成：${procCount} 个文件，跳过 ${skipCount} 个`);
+        setMsg(`处理完成：${resp.processed_files?.length || 0} 个文件，跳过 ${resp.skipped || 0} 个`);
       }
       await loadProcessed(current);
-    } catch (e: any) {
-      setMsg("处理失败：" + e.message);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e: any) { setMsg("处理失败：" + e.message); }
+    finally { setBusy(false); }
   };
 
   const onClearMarkers = async () => {
@@ -306,9 +308,7 @@ export default function App() {
       const r = await api.clearMarkers(current);
       setMsg(`已清除 ${r.cleared} 条处理标记`);
       setMarkers([]);
-    } catch (e: any) {
-      setMsg("清除标记失败：" + e.message);
-    }
+    } catch (e: any) { setMsg("清除标记失败：" + e.message); }
   };
 
   return (
@@ -336,9 +336,23 @@ export default function App() {
           onSelectAll={selectAllInCurrent}
           onMkdir={onMkdir}
           onRmdir={onRmdir}
+          onDeleteFile={onDeleteFile}
+          onPreviewFile={onPreviewFile}
+          onOpenExplorer={onOpenExplorer}
+          onMoveItem={onMoveItem}
         />
-        <ProcessedPanel markers={markers} bundle={bundle} />
-        <section className="reserved" />
+        <ProcessedPanel
+          markers={markers}
+          bundle={bundle}
+          onPreviewFile={onPreviewFile}
+          onOpenExplorer={onOpenExplorer}
+        />
+        <PreviewPanel
+          name={previewName}
+          content={previewContent}
+          loading={previewLoading}
+          error={previewError}
+        />
       </div>
       <div className="bottom-row">
         <div className="bottom-left">

@@ -1,151 +1,145 @@
 import React, { useState } from "react";
+import ContextMenu from "./ContextMenu";
 
-interface Marker {
-  rel_path?: string;
-  path?: string;
-  chash?: string;
-  processed_at?: number;
-  source_type?: string;
+interface BundleData {
+  total_files: number;
+  total_corpus: number;
+  product_kinds: Record<string, number>;
+  structured: number;
+  output_path?: string;
+}
+
+interface MarkerData {
+  rel_path: string;
+  path: string;
+  status: string;
+  kind: string;
+  struct_type: string;
 }
 
 interface Props {
-  markers: Marker[];
-  bundle: any;
+  markers: MarkerData[];
+  bundle: BundleData | null;
+  onPreviewFile?: (path: string) => void;
+  onOpenExplorer?: (path: string) => void;
 }
 
-/** 从 markers 列表构建树形结构 */
-interface TreeNode {
-  name: string;
+interface MenuState {
+  visible: boolean;
+  x: number;
+  y: number;
   path: string;
-  children: Map<string, TreeNode>;
-  files: Marker[];
-  isFolder: boolean;
 }
 
-function buildTree(markers: Marker[]): TreeNode | null {
-  if (!markers.length) return null;
-  const root: TreeNode = {
-    name: "仓库根",
-    path: "",
-    children: new Map(),
-    files: [],
-    isFolder: true,
+export default function ProcessedPanel({ markers, bundle, onPreviewFile, onOpenExplorer }: Props) {
+  const [menu, setMenu] = useState<MenuState>({
+    visible: false, x: 0, y: 0, path: "",
+  });
+
+  const processedFiles = markers.filter((m) => m.status === "processed");
+  const failedFiles = markers.filter((m) => m.status === "failed");
+
+  const handleContextMenu = (e: React.MouseEvent, path: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ visible: true, x: e.clientX, y: e.clientY, path });
   };
 
-  for (const m of markers) {
-    const p = m.rel_path || m.path || "";
-    if (!p) continue;
-    const parts = p.split("/").filter(Boolean);
-    let cur = root;
-    // 最后一部分是文件名
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      const childPath = cur.path ? cur.path + "/" + part : part;
-      if (!cur.children.has(part)) {
-        cur.children.set(part, {
-          name: part,
-          path: childPath,
-          children: new Map(),
-          files: [],
-          isFolder: true,
-        });
-      }
-      cur = cur.children.get(part)!;
-    }
-    const fileName = parts[parts.length - 1];
-    if (fileName) {
-      cur.files.push(m);
-    }
-  }
-  return root;
-}
+  const safePath = menu.path || "";
+  const menuItems = [
+    ...(onOpenExplorer ? [{ label: "在资源管理器中打开", action: () => onOpenExplorer(safePath) }] : []),
+    ...(onPreviewFile && (safePath.toLowerCase().endsWith(".md") || safePath.toLowerCase().endsWith(".txt"))
+      ? [{ label: "预览文件", action: () => onPreviewFile(safePath) }]
+      : []),
+  ];
 
-function TreeItem({ node, depth }: { node: TreeNode; depth: number }) {
-  const [open, setOpen] = useState(depth < 2); // 默认展开前2层
+  // 按路径分组
+  const groupByFolder = (files: MarkerData[]) => {
+    const groups: Record<string, MarkerData[]> = {};
+    files.forEach((f) => {
+      const rp = f.rel_path || f.path || "";
+      const folder = rp.includes("/") ? rp.split("/").slice(0, -1).join("/") : "";
+      if (!groups[folder]) groups[folder] = [];
+      groups[folder].push(f);
+    });
+    return groups;
+  };
 
-  const subFolders = Array.from(node.children.values()).sort((a, b) =>
-    a.name.localeCompare(b.name, "zh")
-  );
-
-  return (
-    <div className="proc-tree-node" style={{ marginLeft: depth * 16 }}>
-      {subFolders.length > 0 && (
-        <div className="proc-tree-children">
-          {subFolders.map((child) => (
-            <div key={child.path}>
-              <div
-                className="proc-tree-folder"
-                onClick={() => setOpen(!open)}
-                style={{ cursor: "pointer" }}
-              >
-                <span className="ficon">{open ? "📂" : "📁"}</span>
-                <span>{child.name}</span>
-                <span className="proc-count">
-                  ({child.files.length + countAllFiles(child)})
-                </span>
-              </div>
-              {open && <TreeItem node={child} depth={depth + 1} />}
-            </div>
-          ))}
-        </div>
-      )}
-      {node.files.length > 0 && (
-        <div className="proc-tree-files">
-          {node.files.map((f, i) => {
-            const p = f.rel_path || f.path || "";
-            const name = p.split("/").pop() || p;
-            return (
-              <div key={i} className="proc-tree-file">
-                <span className="ficon">📄</span>
-                <span>{name}</span>
-                <span className="proc-dot">✓</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function countAllFiles(node: TreeNode): number {
-  let count = node.files.length;
-  for (const child of node.children.values()) {
-    count += countAllFiles(child);
-  }
-  return count;
-}
-
-export default function ProcessedPanel({ markers, bundle }: Props) {
-  const tree = buildTree(markers);
-
-  return (
-    <aside className="processed">
-      <div className="proc-head">
-        <span>已处理 ({markers.length})</span>
+  const renderFile = (f: MarkerData) => {
+    const rp = f.rel_path || f.path || "";
+    return (
+      <div
+        key={rp}
+        className={`proc-tree-file ${f.status === "failed" ? "failed" : ""}`}
+        onContextMenu={(e) => handleContextMenu(e, rp)}
+        onDoubleClick={() => {
+          if (onPreviewFile && (rp.toLowerCase().endsWith(".md") || rp.toLowerCase().endsWith(".txt"))) {
+            onPreviewFile(rp);
+          }
+        }}
+        title="双击预览"
+      >
+        <span className="proc-dot">{f.status === "failed" ? "✗" : "✓"}</span>
+        <span className="mpath">{rp.split("/").pop()}</span>
+        {f.kind && <span className="kind kind-{f.kind}">{f.kind}</span>}
       </div>
+    );
+  };
 
+  return (
+    <div className="processed">
+      <div className="processed-head">已处理</div>
       {bundle && (
         <div className="bundle-info">
-          <div className="bundle-title">最新 Bundle</div>
+          <div className="bundle-title">📦 Bundle 摘要</div>
           <div className="bundle-stats">
-            <span>产品: {bundle.counts?.products || 0}</span>
-            <span>语料: {bundle.counts?.corpus || 0}</span>
-            <span>原料: {bundle.counts?.raw || 0}</span>
+            <span>文件: {bundle.total_files}</span>
+            <span>语料: {bundle.total_corpus}</span>
+            {bundle.structured > 0 && <span>结构化: {bundle.structured}</span>}
           </div>
-          {bundle.bundle_dir && (
-            <div className="bundle-path">{bundle.bundle_dir}</div>
+          {bundle.output_path && (
+            <div className="bundle-path">📁 {bundle.output_path}</div>
           )}
         </div>
       )}
-
-      {tree ? (
-        <div className="proc-tree">
-          <TreeItem node={tree} depth={0} />
-        </div>
+      {processedFiles.length === 0 && failedFiles.length === 0 ? (
+        <div className="empty">尚未处理任何文件</div>
       ) : (
-        <div className="empty">（尚无已处理文件）</div>
+        <div className="proc-tree">
+          {/* 成功文件 */}
+          {processedFiles.length > 0 && (
+            <div className="proc-tree-section">
+              <div className="proc-tree-folder">
+                <span className="ficon">✓</span>
+                <span>已处理 ({processedFiles.length})</span>
+              </div>
+              {Object.entries(groupByFolder(processedFiles)).map(([folder, files]) => (
+                <div key={folder} className="proc-tree-files">
+                  {folder && <div className="proc-tree-folder-label">{folder}</div>}
+                  {files.map(renderFile)}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* 失败文件 */}
+          {failedFiles.length > 0 && (
+            <div className="proc-tree-section">
+              <div className="proc-tree-folder">
+                <span className="ficon">✗</span>
+                <span>失败 ({failedFiles.length})</span>
+              </div>
+              {failedFiles.map(renderFile)}
+            </div>
+          )}
+        </div>
       )}
-    </aside>
+      <ContextMenu
+        visible={menu.visible}
+        x={menu.x}
+        y={menu.y}
+        items={menuItems}
+        onClose={() => setMenu({ visible: false, x: 0, y: 0, path: "" })}
+      />
+    </div>
   );
 }

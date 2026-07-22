@@ -31,7 +31,6 @@ export default function ProcessPanel({ busy, hasSelection, outputDir, status, on
 
   return (
     <div className="process">
-      <div className="process-head">处理</div>
       <div className="process-buttons">
         <button
           className="primary"
