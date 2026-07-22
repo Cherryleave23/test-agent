@@ -1,7 +1,7 @@
 """宝宝/客户档案持久化（MOD-baby-profile，P2）。
 
 按 (enterprise_id, employee_id) 隔离（与 SessionStore 一致），跨员工不可见。
-客户为 1→N 宝宝的一等实体；所有写入经 WAL 连接，复用 common.db.connect。
+客户为 1→N 宝宝的一等实体；所有写入经 WAL 连接，复用 common.db.db_tx。
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import json
 import time
 from typing import List, Optional
 
-from common.db import connect
+from common.db import db_tx
 from baby.models import BabyProfile, Customer
 from common.crypto import get_vault
 import threading
@@ -60,7 +60,8 @@ class BabyProfileStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect，确保连接在 finally 中关闭
+        with db_tx(self.db_path) as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS customers (
@@ -105,14 +106,14 @@ class BabyProfileStore:
                 conn.execute("ALTER TABLE babies ADD COLUMN medical_history_json TEXT")
             if "feeding_history_json" not in cols:
                 conn.execute("ALTER TABLE babies ADD COLUMN feeding_history_json TEXT")
-            conn.commit()
 
     # ------------------------------------------------------------------
     # customers
     # ------------------------------------------------------------------
     def get_or_create_customer(self, ent: str, emp: str, name: str) -> int:
         """按 (ent, emp, name) 去重取/建客户，返回 customer_id。"""
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             row = conn.execute(
                 "SELECT customer_id FROM customers "
                 "WHERE enterprise_id=? AND employee_id=? AND name=?",
@@ -125,11 +126,11 @@ class BabyProfileStore:
                 "VALUES(?,?,?,?)",
                 (ent, emp, name, time.time()),
             )
-            conn.commit()
             return cur.lastrowid
 
     def get_customer(self, customer_id: int) -> Optional[Customer]:
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             row = conn.execute(
                 "SELECT * FROM customers WHERE customer_id=?", (customer_id,)
             ).fetchone()
@@ -146,12 +147,12 @@ class BabyProfileStore:
 
         当自动建档时客户名为「（未命名客户）」，后续消息提供真实客户名时调用。
         """
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             conn.execute(
                 "UPDATE customers SET name=? WHERE customer_id=?",
                 (name, customer_id),
             )
-            conn.commit()
 
     def update_baby_customer(self, baby_id: int, customer_id: int) -> None:
         """更新宝宝的客户关联（D2 修复：避免共享 customer 记录导致串档）。
@@ -160,18 +161,19 @@ class BabyProfileStore:
         直接更新该 customer 记录的 name 会影响所有共享宝宝。
         本方法创建新的 customer 记录并更新 baby 的 customer_id 关联，避免串档。
         """
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             conn.execute(
                 "UPDATE babies SET customer_id=? WHERE baby_id=?",
                 (customer_id, baby_id),
             )
-            conn.commit()
 
     # ------------------------------------------------------------------
     # babies
     # ------------------------------------------------------------------
     def create_baby(self, baby: BabyProfile) -> int:
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             cur = conn.execute(
                 """INSERT INTO babies(enterprise_id, employee_id, customer_id, name,
                    baby_age, gender, stage, allergens_json, budget, brand_preference_json,
@@ -187,11 +189,11 @@ class BabyProfileStore:
                  _enc(json.dumps(baby.medical_history, ensure_ascii=False)),
                  _enc(json.dumps(baby.feeding_history, ensure_ascii=False))),
             )
-            conn.commit()
             return cur.lastrowid
 
     def get_baby(self, baby_id: int) -> Optional[BabyProfile]:
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             row = conn.execute(
                 "SELECT * FROM babies WHERE baby_id=?", (baby_id,)
             ).fetchone()
@@ -227,7 +229,8 @@ class BabyProfileStore:
             if cur is None:
                 raise KeyError(f"baby_id 不存在: {baby_id}")
             merged = cur.merge(attrs)
-            with connect(self.db_path) as conn:
+            # P2-R5-1: 使用 db_tx 替代 connect
+            with db_tx(self.db_path) as conn:
                 conn.execute(
                     """UPDATE babies SET customer_id=?, name=?, baby_age=?, gender=?, stage=?,
                        allergens_json=?, budget=?, brand_preference_json=?, category=?,
@@ -244,16 +247,15 @@ class BabyProfileStore:
                      _enc(json.dumps(merged.feeding_history, ensure_ascii=False)),
                      baby_id),
                 )
-                conn.commit()
             return merged
 
     def mark_confirmed(self, baby_id: int) -> None:
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             conn.execute(
                 "UPDATE babies SET status='confirmed', updated_at=? WHERE baby_id=?",
                 (time.time(), baby_id),
             )
-            conn.commit()
 
     def merge_baby(self, target_id: int, source_id: int) -> BabyProfile:
         """把 source 档案合并进 target 并删除 source（自然语言修正安全网）。"""
@@ -266,7 +268,8 @@ class BabyProfileStore:
             if target is None or source is None:
                 raise KeyError("merge 需两端均存在")
             merged = target.merge(source)
-            with connect(self.db_path) as conn:
+            # P2-R5-1: 使用 db_tx 替代 connect
+            with db_tx(self.db_path) as conn:
                 conn.execute(
                     """UPDATE babies SET customer_id=?, name=?, baby_age=?, gender=?, stage=?,
                        allergens_json=?, budget=?, brand_preference_json=?, category=?,
@@ -284,7 +287,6 @@ class BabyProfileStore:
                      target_id),
                 )
                 conn.execute("DELETE FROM babies WHERE baby_id=?", (source_id,))
-                conn.commit()
             return merged
         finally:
             for bid in sorted({target_id, source_id}):
@@ -292,9 +294,9 @@ class BabyProfileStore:
 
     def delete_baby(self, baby_id: int) -> None:
         with self._lock_for_baby(baby_id):
-            with connect(self.db_path) as conn:
+            # P2-R5-1: 使用 db_tx 替代 connect
+            with db_tx(self.db_path) as conn:
                 conn.execute("DELETE FROM babies WHERE baby_id=?", (baby_id,))
-                conn.commit()
 
     def find_baby_by_name(self, ent: str, emp: str, name: str) -> Optional[int]:
         """自动建档去重：仅匹配 **已确认(confirmed)** 且**唯一**的同名宝宝。
@@ -320,20 +322,21 @@ class BabyProfileStore:
         返回删除条数。
         """
         cutoff = time.time() - days * 86400.0
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             cur = conn.execute(
                 "DELETE FROM babies WHERE status='pending' "
                 "AND created_at IS NOT NULL AND created_at < ?",
                 (cutoff,),
             )
             n = cur.rowcount
-            conn.commit()
-            return n
+        return n
 
     def list_for_employee(self, ent: str, emp: str) -> List[dict]:
         """返回该员工 (客户→宝宝) 清单，供 LLM 消歧上下文（不含无关员工/企业）。"""
         out: List[dict] = []
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             rows = conn.execute(
                 """SELECT b.baby_id, b.name AS baby_name, b.baby_age, b.stage,
                           b.allergens_json, b.budget, b.category, b.status,
@@ -359,7 +362,8 @@ class BabyProfileStore:
     def list_all_for_enterprise(self, ent: str) -> List[dict]:
         """返回该企业全部宝宝清单（管理后台用，跨员工）。"""
         out: List[dict] = []
-        with connect(self.db_path) as conn:
+        # P2-R5-1: 使用 db_tx 替代 connect
+        with db_tx(self.db_path) as conn:
             rows = conn.execute(
                 """SELECT b.baby_id, b.name AS baby_name, b.baby_age, b.gender,
                           b.stage, b.status, b.enterprise_id, b.employee_id

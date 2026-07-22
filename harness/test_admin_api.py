@@ -25,6 +25,7 @@
 """
 import os
 import sys
+import time
 import tempfile
 import json
 import shutil
@@ -409,6 +410,84 @@ def a21_api_cross_tenant_403():
     assert r2.status_code == 403, f"跨租户删除应返回 403，实际: {r2.status_code}"
 
 
+def a22_cross_tenant_delete_employee_404():
+    """A22: 跨租户删除员工 → 404（不泄露他企员工存在性）。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    # 直接插入他企员工到 admin_employees
+    with connect(db) as conn:
+        cur = conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, employee_id, employee_name) "
+            "VALUES(?,?,?)",
+            ("ent_other", "emp_x", "他企员工"),
+        )
+        emp_id = cur.lastrowid
+        conn.commit()
+    # 当前实例 ent_test 尝试删除 → 404（不返回 403 以避免信息泄露）
+    r = client.delete(f"/api/employees/{emp_id}")
+    assert r.status_code == 404, f"跨租户删除员工应返回 404，实际: {r.status_code}"
+
+
+def a23_cross_tenant_unbind_gateway_404():
+    """A23: 跨租户解绑网关 → 404。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    # 直接插入他企员工的网关绑定
+    with connect(db) as conn:
+        cur = conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, employee_id, employee_name, "
+            "wechat_name, bot_token, bound_at) VALUES(?,?,?,?,?,?)",
+            ("ent_other", "emp_y", "他企网关员工", "他企微信", "tok-other-12345678", time.time()),
+        )
+        bind_id = cur.lastrowid
+        conn.commit()
+    # 当前实例 ent_test 尝试解绑 → 404
+    r = client.delete(f"/api/gateway/{bind_id}")
+    assert r.status_code == 404, f"跨租户解绑网关应返回 404，实际: {r.status_code}"
+
+
+def a24_cross_tenant_baby_detail_403():
+    """A24: 跨租户查看宝宝详情 → 403。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    from baby.store import BabyProfileStore
+    from baby.models import BabyProfile
+    # 创建他企宝宝档案
+    store = BabyProfileStore(db)
+    cid = store.get_or_create_customer("ent_other", "emp_x", "他企客户")
+    bid = store.create_baby(BabyProfile(
+        baby_id=None, enterprise_id="ent_other", employee_id="emp_x",
+        customer_id=cid, name="他企宝宝", baby_age="6个月", gender="女",
+        stage="婴儿", allergens=[], budget=1000, brand_preference=[],
+        category="配方粉", health_notes="", birth_date="2024-06-01",
+        gestational_weeks=38, medical_history=[], feeding_history=[],
+    ))
+    # 当前实例 ent_test 尝试查看 → 403
+    r = client.get(f"/api/babies/{bid}")
+    assert r.status_code == 403, f"跨租户查看宝宝详情应返回 403，实际: {r.status_code}"
+
+
+def a25_cross_tenant_list_stores_filtered():
+    """A25: 跨租户 list_stores 不返回他企门店。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    # 直接插入他企门店
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO admin_stores(enterprise_id, enterprise_name, db_path, created_at) "
+            "VALUES(?,?,?,?)",
+            ("ent_other", "他企门店", "other.db", time.time()),
+        )
+        conn.commit()
+    # 当前实例 ent_test 查询门店列表
+    r = client.get("/api/stores")
+    assert r.status_code == 200
+    stores = r.json()
+    # 不应返回他企门店
+    for s in stores:
+        assert s["enterprise_id"] != "ent_other", "list_stores 不应返回他企门店"
+
+
 CHECKS = [
     ("A1 create_app 路由含 5 大板块", a1_app_routes),
     ("A2 GET /api/llm 返回 LLM 配置", a2_get_llm_config),
@@ -431,6 +510,10 @@ CHECKS = [
     ("A19 Bearer Token 认证（无/正确/错误）", a19_bearer_token_auth),
     ("A20 跨租户隔离（confirm/delete 拒绝越权）", a20_cross_tenant_isolation),
     ("A21 API 级跨租户拒绝（403）", a21_api_cross_tenant_403),
+    ("A22 跨租户删除员工→404", a22_cross_tenant_delete_employee_404),
+    ("A23 跨租户解绑网关→404", a23_cross_tenant_unbind_gateway_404),
+    ("A24 跨租户查看宝宝详情→403", a24_cross_tenant_baby_detail_403),
+    ("A25 跨租户list_stores不暴露他企", a25_cross_tenant_list_stores_filtered),
 ]
 
 
