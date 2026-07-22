@@ -156,10 +156,13 @@ class ImageTableAdapter:
                 arr = np.array(pil.convert("RGB"))
             gray = _preprocess(arr)
             text, low_conf = _ocr_image(gray, run_real_ocr)
-            # PP-StructureV3 表格抽取（共享模块，对原图 RGB 跑版面分析+表格识别）
+            # PP-StructureV3 表格抽取
+            # 用预缩放后的 RGB 图（gray → RGB），避免在全分辨率图上跑（太慢）
             tables = []
             if run_real_ocr and paddle_available() and get_ppstructure() is not None:
-                tables = _extract_tables_ppstructure(arr)
+                # 从预处理后的灰度图重建 RGB（已缩放到 ≤1600px）
+                resized_rgb = np.stack([gray] * 3, axis=-1)
+                tables = _extract_tables_ppstructure(resized_rgb)
         except (OCRDeferred, OCRDependencyMissing):
             raise
         except Exception as e:

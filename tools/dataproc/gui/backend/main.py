@@ -7,7 +7,8 @@
   - POST /tree/mkdir: 新建子文件夹
   - DELETE /tree/rmdir: 删除子文件夹
   - POST /upload: 拖拽上传文件
-  - POST /process: 处理（支持 force 强制重处理、out_dir 自定义输出）
+  - POST /process: 异步处理（后台线程，立即返回）
+  - GET /process/status: 轮询处理进度（含实时日志）
   - GET /processed: 已处理标记列表
   - POST /markers/clear: 清除处理标记
   - GET /bundle: 获取最新 bundle manifest
@@ -15,15 +16,23 @@
   - GET /repos/base: 获取当前仓库根目录
 """
 import json
+import logging
 import os
 
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, FileResponse
 
-from . import repos, tree, upload, markers, process as proc
+from . import repos, tree, upload, markers, process as proc, progress
 from .models import RepoCreate, SettingsUpdate
 
-app = FastAPI(title="dataproc GUI backend", version="0.3.0")
+# 配置日志：确保 info 级别日志输出到控制台
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+app = FastAPI(title="dataproc GUI backend", version="0.4.0")
 
 _DIST = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -136,14 +145,21 @@ def clear_markers_ep(name: str = Form(...)):
 @app.post("/process")
 def do_process(name: str = Form(...), selection: str = Form(None),
                force: str = Form("false"), out_dir: str = Form("")):
+    """异步处理：后台线程运行，立即返回。前端轮询 /process/status 获取进度。"""
     sel = json.loads(selection) if selection else None
     try:
-        return proc.process(name, sel, force=(force.lower() == "true"),
-                            out_dir=out_dir or None)
+        return proc.process_async(name, sel, force=(force.lower() == "true"),
+                                   out_dir=out_dir or None)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/process/status")
+def get_process_status():
+    """轮询处理进度。返回 status/total/processed/current_file/logs 等。"""
+    return progress.get()
 
 
 @app.get("/bundle")

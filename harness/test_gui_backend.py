@@ -106,11 +106,12 @@ def main():
             if "extra.md" not in {f["name"] for f in p2["files"]}:
                 fails.append("G3: 上传文件未落到 产品资料/奶粉")
 
-        # G4 + G5：首次全量处理
-        pr1 = client.post("/process", data={"name": "企业A"}).json()
-        n1 = len(pr1.get("processed_files", []))
+        # G4 + G5：首次全量处理（异步，需轮询等待完成）
+        resp1 = client.post("/process", data={"name": "企业A"}).json()
+        pr1 = _wait_process(client, resp1)
+        n1 = pr1.get("processed", 0)
         if n1 != 4:
-            fails.append(f"G4/G5: 首次处理文件数应为4，实际 {n1}（{pr1.get('processed_files')}）")
+            fails.append(f"G4/G5: 首次处理文件数应为4，实际 {n1}")
         if pr1.get("skipped") != 0:
             fails.append(f"G4: 首次 skipped 应为0，实际 {pr1.get('skipped')}")
 
@@ -128,9 +129,10 @@ def main():
             fails.append("G5: manifest.enterprise_id 不匹配")
 
         # G4：二次处理（哈希未变 → 跳过，计数 0）
-        pr2 = client.post("/process", data={"name": "企业A"}).json()
-        if len(pr2.get("processed_files", [])) != 0:
-            fails.append(f"G4: 二次处理应跳过全部（计数0），实际 {pr2.get('processed_files')}")
+        resp2 = client.post("/process", data={"name": "企业A"}).json()
+        pr2 = _wait_process(client, resp2)
+        if pr2.get("processed", 0) != 0:
+            fails.append(f"G4: 二次处理应跳过全部（计数0），实际 {pr2.get('processed')}")
         if pr2.get("skipped") != 4:
             fails.append(f"G4: 二次 skipped 应为4，实际 {pr2.get('skipped')}")
     finally:
@@ -152,7 +154,29 @@ def _ent_id(client):
     for x in client.get("/repos").json()["repos"]:
         if x["name"] == "企业A":
             return x["enterprise_id"]
-    return None
+
+
+def _wait_process(client, resp: dict, timeout: int = 60) -> dict:
+    """等待异步处理完成，返回最终状态。
+
+    resp 是 /process 的初始返回：
+      - {"status": "started", ...} → 轮询 /process/status 直到 done/error
+      - {"status": "done", ...} → 直接返回
+      - 其他（兼容旧格式）→ 直接返回 resp
+    """
+    import time
+    if resp.get("status") == "started":
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            s = client.get("/process/status").json()
+            if s.get("status") != "running":
+                return s
+            time.sleep(0.5)
+        return {"status": "timeout", "error": "处理超时"}
+    # done 或旧格式
+    if "processed" not in resp and "processed_files" in resp:
+        resp["processed"] = len(resp["processed_files"])
+    return resp
 
 
 if __name__ == "__main__":

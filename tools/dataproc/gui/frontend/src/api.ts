@@ -68,6 +68,7 @@ export const api = {
     fd.append("out_dir", outDir);
     return req("POST", "/process", fd, true);
   },
+  processStatus: () => req("GET", "/process/status"),
   bundle: (name: string) =>
     req("GET", `/bundle?name=${encodeURIComponent(name)}`),
   getSettings: () => req("GET", "/settings"),

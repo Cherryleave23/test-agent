@@ -208,7 +208,8 @@ def _process_nontext(repo_dir, rel, full_path, kind, cfg, provider, known, state
 
 
 # ---------- 核心：构建 bundle ----------
-def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) -> dict:
+def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None,
+                  progress_cb: Optional[callable] = None) -> dict:
     meta = load_meta(repo_dir)
     namespace = meta.get("namespace", "b")
     ent_id = meta.get("enterprise_id", "ent_unknown")
@@ -233,6 +234,8 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
         selected = None
         full = True
 
+    logger.info("build_bundle: %d files to process (full=%s)", len(processed_files), full)
+
     for top in TOP_FOLDERS:
         kind = KIND_BY_TOP[top]
         for rel in _walk_top(repo_dir, top):
@@ -240,6 +243,9 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
                 continue
             full_path = os.path.join(repo_dir, rel)
             ext = os.path.splitext(rel)[1].lower()
+
+            if progress_cb:
+                progress_cb("processing", rel)
 
             try:
                 if kind == "product_text" and ext == ".md":
@@ -278,7 +284,12 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
                         product_uid=product_uid, meta=meta, lang="zh").to_dict())
             except Exception as e:
                 logger.error("处理文件失败 %s: %s: %s", rel, type(e).__name__, e)
+                if progress_cb:
+                    progress_cb("error", rel, str(e))
                 continue
+
+            if progress_cb:
+                progress_cb("done", rel)
 
     os.makedirs(out_dir, exist_ok=True)
 

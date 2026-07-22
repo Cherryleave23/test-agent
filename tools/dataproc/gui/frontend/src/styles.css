@@ -81,6 +81,27 @@ ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
 .process button:disabled { opacity: 0.5; cursor: not-allowed; }
 .process .hint { font-size: 11px; color: var(--muted); }
 
+/* 进度条 */
+.progress-bar-container { margin: 10px 0; }
+.progress-info { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+.progress-info .elapsed { color: var(--muted); }
+.progress-bar-track { width: 100%; height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s ease; }
+.progress-current { font-size: 11px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 实时日志 */
+.process-logs {
+  max-height: 200px; overflow-y: auto; margin: 8px 0;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px; font-size: 11px; font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+.log-line { padding: 1px 0; color: var(--text); line-height: 1.4; }
+.log-line.log-ok { color: #4ade80; }
+.log-line.log-error { color: #f87171; }
+
+.process-done { color: #4ade80; font-weight: 600; margin: 8px 0; font-size: 13px; }
+.process-error { color: #f87171; font-weight: 600; margin: 8px 0; font-size: 13px; }
+
 .bundle-sum { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 12px; }
 .kinds { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .kind { background: #11202c; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; font-size: 11px; }

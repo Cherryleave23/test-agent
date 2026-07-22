@@ -204,13 +204,37 @@ export default function App() {
     setBusy(true);
     setMsg(full ? "全量处理中…" : "选择性处理中…");
     try {
-      const sum = await api.process(current, selection, force, settings.output_dir || "");
-      const procCount = sum.processed_files?.length || 0;
-      const skipCount = sum.skipped || 0;
-      if (procCount === 0 && skipCount > 0) {
-        setMsg(`全部跳过：${skipCount} 个文件已处理且内容未变。勾选「强制重新处理」可重新处理。`);
+      const resp = await api.process(current, selection, force, settings.output_dir || "");
+
+      // 异步处理：如果立即返回 started，则轮询直到完成
+      if (resp.status === "started") {
+        setMsg(`处理已启动：${resp.total} 个文件（跳过 ${resp.skipped} 个已处理）`);
+        // 轮询等待完成（ProcessPanel 也会同时轮询显示进度）
+        const poll = async (): Promise<void> => {
+          const s = await api.processStatus();
+          if (s.status === "running") {
+            await new Promise((r) => setTimeout(r, 1500));
+            return poll();
+          }
+          return;
+        };
+        await poll();
+        const final = await api.processStatus();
+        if (final.status === "error") {
+          setMsg("处理失败：" + final.error);
+        } else {
+          const procCount = final.processed || 0;
+          const skipCount = final.skipped || 0;
+          setMsg(`处理完成：${procCount} 个文件，跳过 ${skipCount} 个`);
+        }
+      } else if (resp.status === "done") {
+        // 所有文件已跳过
+        setMsg(`全部跳过：${resp.skipped} 个文件已处理且内容未变。勾选「强制重新处理」可重新处理。`);
       } else {
-        setMsg(`处理完成：${procCount} 个文件，跳过 ${skipCount} 个已处理`);
+        // 兼容旧同步返回格式
+        const procCount = resp.processed_files?.length || 0;
+        const skipCount = resp.skipped || 0;
+        setMsg(`处理完成：${procCount} 个文件，跳过 ${skipCount} 个`);
       }
       await loadProcessed(current);
     } catch (e: any) {

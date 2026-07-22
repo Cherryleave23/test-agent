@@ -1,17 +1,14 @@
 """PP-StructureV3 表格识别共享模块（PaddleOCR 3.x API）。
 
-消除 pdf.py / image_table.py 中的 _TableHTMLParser 和 PP-Structure 初始化逻辑重复。
-提供：
-  - TableHTMLParser: HTML 表格 → 二维 cells 数组
-  - get_ppstructure(): PPStructureV3 引擎单例（首次调用初始化，后续复用）
-  - extract_tables(img_array): 从图像抽取表格区域
+性能优化：
+  - mkldnn + monkey-patch（同 _paddle_ocr.py）
+  - 接收预缩放图片（调用方负责缩放到 1600px）
+  - 关闭不需要的模块（方向分类/矫正/公式/印章/图表）
 
 3.x 变更：
   - PPStructure → PPStructureV3
   - __call__(img) → predict(img)
   - 结果格式：LayoutParsingResultV2，table_res_list[i]["pred_html"]
-
-零 src.*，零外部硬依赖（paddleocr 缺失时返回空/None）。
 """
 from __future__ import annotations
 
@@ -23,7 +20,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# 禁用模型源检查，加速初始化
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 
@@ -32,8 +28,8 @@ class TableHTMLParser(HTMLParser):
 
     def __init__(self):
         super().__init__()
-        self.rows: list = []          # 最终输出：二维 cells 数组（矩形）
-        self._occupied: set = set()   # 已被占用的 (row, col)
+        self.rows: list = []
+        self._occupied: set = set()
         self._row: int = -1
         self._cur_cell: str = ""
         self._cur_col: int = 0
@@ -57,7 +53,6 @@ class TableHTMLParser(HTMLParser):
             colspan = self._int_attr(attrd, "colspan")
             rowspan = self._int_attr(attrd, "rowspan")
             self._cur_span = (colspan, rowspan)
-            # 找当前行下一个未被占用的列（跳过上方 rowspan 占位）
             c = 0
             while (self._row, c) in self._occupied:
                 c += 1
@@ -68,7 +63,6 @@ class TableHTMLParser(HTMLParser):
             colspan, rowspan = self._cur_span
             r0, c0 = self._row, self._cur_col
             value = self._cur_cell.strip()
-            # 把值写入跨度覆盖的每个位置，保证二维数组列对齐
             for dr in range(rowspan):
                 for dc in range(colspan):
                     rr, cc = r0 + dr, c0 + dc
@@ -90,7 +84,6 @@ class TableHTMLParser(HTMLParser):
             self._cur_cell += data
 
 
-# 模块级单例：避免每次调用重新初始化 PPStructureV3 引擎
 _pp_engine: Optional[object] = None
 _pp_initialized: bool = False
 _pp_lock = threading.Lock()
@@ -99,8 +92,7 @@ _pp_lock = threading.Lock()
 def get_ppstructure():
     """获取 PPStructureV3 引擎单例。
 
-    使用 PaddleOCR 3.x API：PPStructureV3(engine="paddle_static", engine_config={...})
-    与 PaddleOCR 相同的 engine 配置，避免 Windows PIR/oneDNN 问题。
+    配置：mkldnn + patch + 关闭不需要的模块。
     缺依赖返回 None。
     """
     global _pp_engine, _pp_initialized
@@ -117,6 +109,10 @@ def get_ppstructure():
             _pp_engine = None
             return _pp_engine
 
+        # 复用 OCR 的 mkldnn patch
+        from ._paddle_ocr import _patch_paddle_inference_config
+        _patch_paddle_inference_config()
+
         try:
             _pp_engine = PPStructureV3(
                 use_table_recognition=True,
@@ -130,12 +126,11 @@ def get_ppstructure():
                 engine_config={
                     "device_type": "cpu",
                     "cpu_threads": 4,
-                    "run_mode": "paddle",
+                    "run_mode": "mkldnn",
                 },
             )
-            logger.info("PPStructureV3 引擎初始化成功 (engine=paddle_static, run_mode=paddle)")
+            logger.info("PPStructureV3 引擎初始化成功 (mkldnn, 表格识别=ON)")
         except TypeError:
-            # 兼容：旧版不支持 engine/engine_config
             try:
                 _pp_engine = PPStructureV3(
                     use_table_recognition=True,
@@ -159,17 +154,7 @@ def get_ppstructure():
 def extract_tables(img_array) -> list:
     """用 PPStructureV3 从图像中抽取表格区域，返回 table dict 列表。
 
-    3.x 结果格式：LayoutParsingResultV2
-      - result["table_res_list"]: list of dict, each has:
-        - "pred_html": 表格 HTML 字符串
-        - "cell_box_list": 单元格坐标列表
-
-    每个 table dict 包含：
-    - html: 表格 HTML 结构字符串
-    - cells: [[row_val, ...], ...] 二维数组（从 HTML 解析）
-    - bbox: [x1, y1, x2, y2] 表格区域坐标（从 cell_box_list 推算）
-
-    缺引擎或异常时返回空列表（不阻断 OCR 文本）。
+    注意：调用方应传入预缩放的图片（≤1600px），否则会很慢。
     """
     engine = get_ppstructure()
     if engine is None:
@@ -180,7 +165,6 @@ def extract_tables(img_array) -> list:
         if not results:
             return out
         res = results[0]
-        # 3.x: table_res_list
         table_res_list = res.get("table_res_list", []) if isinstance(res, dict) else []
         if not table_res_list:
             return out
@@ -193,7 +177,6 @@ def extract_tables(img_array) -> list:
             parser = TableHTMLParser()
             parser.feed(html)
             cells = parser.rows if parser.rows else []
-            # 从 cell_box_list 推算 bbox
             cell_boxes = table_res.get("cell_box_list", [])
             bbox = _compute_bbox(cell_boxes)
             out.append({
@@ -207,7 +190,6 @@ def extract_tables(img_array) -> list:
 
 
 def _compute_bbox(cell_boxes) -> list:
-    """从 cell_box_list 推算表格整体 bbox。"""
     if not cell_boxes:
         return [0, 0, 0, 0]
     try:
