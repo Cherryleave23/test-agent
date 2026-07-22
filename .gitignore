@@ -21,3 +21,8 @@ venv/
 .env.*.local
 *.local
 secrets/
+
+# Chroma 向量库运行时产物（测试/调试产生，不入仓）
+*.chroma/
+chroma.sqlite3
+none/
