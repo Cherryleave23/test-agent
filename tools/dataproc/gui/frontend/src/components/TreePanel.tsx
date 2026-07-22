@@ -12,6 +12,7 @@ interface Props {
   currentFolder: string;
   selFiles: Set<string>;
   selFolders: Set<string>;
+  processedPaths: Set<string>;
   onNavigate: (path: string) => void;
   onToggleFile: (path: string) => void;
   onToggleFolder: (path: string) => void;
@@ -34,6 +35,7 @@ export default function TreePanel({
   currentFolder,
   selFiles,
   selFolders,
+  processedPaths,
   onNavigate,
   onToggleFile,
   onToggleFolder,
@@ -75,18 +77,24 @@ export default function TreePanel({
         {!tree.folders.length && <li className="empty">（无子文件夹）</li>}
       </ul>
       <ul className="files">
-        {tree.files.map((f) => (
-          <li key={f.path} className="file">
-            <input
-              type="checkbox"
-              checked={selFiles.has(f.path)}
-              onChange={() => onToggleFile(f.path)}
-            />
-            <span className="ficon">📄</span>
-            <span>{f.name}</span>
-            <span className="fsize">{(f.size / 1024).toFixed(1)}KB</span>
-          </li>
-        ))}
+        {tree.files.map((f) => {
+          const isProcessed = processedPaths.has(f.path);
+          return (
+            <li key={f.path} className="file">
+              <input
+                type="checkbox"
+                checked={selFiles.has(f.path)}
+                onChange={() => onToggleFile(f.path)}
+              />
+              <span className="ficon">📄</span>
+              <span>{f.name}</span>
+              {isProcessed && (
+                <span className="processed-dot" title="已处理">●</span>
+              )}
+              <span className="fsize">{(f.size / 1024).toFixed(1)}KB</span>
+            </li>
+          );
+        })}
         {!tree.files.length && <li className="empty">（无文件）</li>}
       </ul>
     </aside>

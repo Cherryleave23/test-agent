@@ -26,6 +26,10 @@ export default function App() {
   const [selFolders, setSelFolders] = useState<Set<string>>(new Set());
   const [markers, setMarkers] = useState<any[]>([]);
   const [bundle, setBundle] = useState<any>(null);
+  // 已处理文件的相对路径集合（供 TreePanel 显示绿点）
+  const processedPaths = new Set(
+    markers.map((m: any) => m.rel_path || m.path || "").filter(Boolean)
+  );
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -185,6 +189,7 @@ export default function App() {
           currentFolder={currentFolder}
           selFiles={selFiles}
           selFolders={selFolders}
+          processedPaths={processedPaths}
           onNavigate={navigate}
           onToggleFile={toggleFile}
           onToggleFolder={toggleFolder}

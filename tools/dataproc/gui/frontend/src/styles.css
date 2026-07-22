@@ -95,3 +95,38 @@ ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
 .marker.failed .dot { background: var(--danger); }
 .mpath { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .mstatus { color: var(--muted); }
+
+/* 已处理绿点指示器 */
+.processed-dot {
+  color: var(--accent2);
+  font-size: 10px;
+  margin-left: 2px;
+}
+
+/* 已处理面板树状结构 */
+.proc-head { font-weight: 600; margin-bottom: 8px; color: var(--text); }
+.bundle-info {
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px; margin-bottom: 10px; font-size: 12px;
+}
+.bundle-title { font-weight: 600; margin-bottom: 4px; }
+.bundle-stats { display: flex; gap: 12px; color: var(--muted); }
+.bundle-path { margin-top: 4px; color: var(--muted); font-size: 11px; word-break: break-all; }
+
+.proc-tree { font-size: 12px; }
+.proc-tree-node { margin-bottom: 2px; }
+.proc-tree-folder {
+  display: flex; align-items: center; gap: 4px; padding: 3px 4px;
+  border-radius: 4px; color: var(--text);
+}
+.proc-tree-folder:hover { background: var(--panel2); }
+.proc-tree-folder .ficon { font-size: 13px; }
+.proc-count { color: var(--muted); font-size: 11px; }
+
+.proc-tree-files { margin-left: 20px; }
+.proc-tree-file {
+  display: flex; align-items: center; gap: 4px; padding: 2px 4px;
+  color: var(--muted); border-radius: 4px;
+}
+.proc-tree-file:hover { background: var(--panel2); }
+.proc-dot { color: var(--accent2); font-size: 11px; margin-left: auto; }
