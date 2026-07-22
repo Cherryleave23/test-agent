@@ -113,25 +113,32 @@ export default function SettingsPanel({ onSettingsChange }: Props) {
           </div>
           {showOcrGuide && (
             <div className="ocr-guide">
-              <div className="ocr-guide-title">PaddleOCR 安装引导</div>
+              <div className="ocr-guide-title">PaddleOCR 3.x 安装引导</div>
               <ol>
                 <li>
-                  <strong>安装 PaddlePaddle（CPU 版）</strong>
-                  <pre>pip install paddlepaddle==2.6.1</pre>
+                  <strong>安装 PaddlePaddle 3.x（CPU 版）</strong>
+                  <pre>pip install paddlepaddle</pre>
                   <p className="settings-hint">GPU 版请参考 PaddlePaddle 官方文档</p>
                 </li>
                 <li>
-                  <strong>安装 PaddleOCR</strong>
+                  <strong>安装 PaddleOCR 3.x</strong>
                   <pre>pip install paddleocr</pre>
+                  <p className="settings-hint">需 Python 3.9+（表格识别需 3.9+）</p>
                 </li>
                 <li>
-                  <strong>安装依赖（PP-Structure 表格识别）</strong>
+                  <strong>安装表格识别依赖（可选）</strong>
+                  <pre>pip install "paddleocr[doc-parser]"</pre>
+                  <p className="settings-hint">用于 PP-StructureV3 表格识别，不需要表格识别可跳过</p>
+                </li>
+                <li>
+                  <strong>安装辅助依赖</strong>
                   <pre>pip install pymupdf Pillow</pre>
+                  <p className="settings-hint">PDF 扫描件 OCR 需要 PyMuPDF</p>
                 </li>
                 <li>
                   <strong>验证安装</strong>
                   <pre>python -c "from paddleocr import PaddleOCR; print('OK')"</pre>
-                  <p className="settings-hint">首次运行会自动下载模型（约 200MB），请确保网络畅通</p>
+                  <p className="settings-hint">首次运行会自动下载模型（约 300MB），请确保网络畅通</p>
                 </li>
                 <li>
                   <strong>启用 OCR</strong>
@@ -141,6 +148,7 @@ export default function SettingsPanel({ onSettingsChange }: Props) {
               <div className="ocr-guide-note">
                 注意：OCR 处理需要较高 CPU 资源，大文件可能耗时较长。
                 如遇到内存不足，请逐个处理文件而非全量处理。
+                Windows 环境已自动配置 engine=paddle_static + run_mode=paddle 以避免兼容性问题。
               </div>
             </div>
           )}

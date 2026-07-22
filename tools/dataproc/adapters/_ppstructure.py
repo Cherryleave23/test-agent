@@ -1,25 +1,34 @@
-"""PP-Structure 表格识别共享模块。
+"""PP-StructureV3 表格识别共享模块（PaddleOCR 3.x API）。
 
 消除 pdf.py / image_table.py 中的 _TableHTMLParser 和 PP-Structure 初始化逻辑重复。
 提供：
   - TableHTMLParser: HTML 表格 → 二维 cells 数组
-  - get_ppstructure(): 引擎单例（首次调用初始化，后续复用）
+  - get_ppstructure(): PPStructureV3 引擎单例（首次调用初始化，后续复用）
   - extract_tables(img_array): 从图像抽取表格区域
+
+3.x 变更：
+  - PPStructure → PPStructureV3
+  - __call__(img) → predict(img)
+  - 结果格式：LayoutParsingResultV2，table_res_list[i]["pred_html"]
 
 零 src.*，零外部硬依赖（paddleocr 缺失时返回空/None）。
 """
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from html.parser import HTMLParser
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# 禁用模型源检查，加速初始化
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
 
 class TableHTMLParser(HTMLParser):
-    """从 PP-Structure 输出的 HTML 中解析单元格为二维数组，支持 colspan/rowspan。"""
+    """从 PP-StructureV3 输出的 HTML 中解析单元格为二维数组，支持 colspan/rowspan。"""
 
     def __init__(self):
         super().__init__()
@@ -81,58 +90,84 @@ class TableHTMLParser(HTMLParser):
             self._cur_cell += data
 
 
-# 模块级单例：避免每次调用重新初始化 PP-Structure 引擎
+# 模块级单例：避免每次调用重新初始化 PPStructureV3 引擎
 _pp_engine: Optional[object] = None
 _pp_initialized: bool = False
 _pp_lock = threading.Lock()
 
 
 def get_ppstructure():
-    """获取 PP-Structure 引擎单例。
+    """获取 PPStructureV3 引擎单例。
 
-    首次调用尝试初始化；缺依赖返回 None。后续调用直接返回缓存实例。
-    线程安全：通过 _pp_lock 保护全局可变状态。
+    使用 PaddleOCR 3.x API：PPStructureV3(engine="paddle_static", engine_config={...})
+    与 PaddleOCR 相同的 engine 配置，避免 Windows PIR/oneDNN 问题。
+    缺依赖返回 None。
     """
     global _pp_engine, _pp_initialized
     if _pp_initialized:
         return _pp_engine
     with _pp_lock:
-        # 双重检查，避免锁内重复初始化
         if _pp_initialized:
             return _pp_engine
         _pp_initialized = True
         try:
-            from paddleocr import PPStructure
-            _pp_engine = PPStructure(
-                layout=True, table=True,
-                ocr=True, structure_version="PP-StructureV2",
-            )
-            logger.info("PP-Structure 引擎初始化成功")
+            from paddleocr import PPStructureV3
         except ImportError:
-            logger.info("paddleocr 未安装，PP-Structure 表格识别不可用")
+            logger.info("paddleocr 未安装，PPStructureV3 表格识别不可用")
             _pp_engine = None
+            return _pp_engine
+
+        try:
+            _pp_engine = PPStructureV3(
+                use_table_recognition=True,
+                use_formula_recognition=False,
+                use_chart_recognition=False,
+                use_seal_recognition=False,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                lang="ch",
+                engine="paddle_static",
+                engine_config={
+                    "device_type": "cpu",
+                    "cpu_threads": 4,
+                    "run_mode": "paddle",
+                },
+            )
+            logger.info("PPStructureV3 引擎初始化成功 (engine=paddle_static, run_mode=paddle)")
         except TypeError:
-            # PaddleOCR 3.x API 变更，尝试简化参数
+            # 兼容：旧版不支持 engine/engine_config
             try:
-                from paddleocr import PPStructure
-                _pp_engine = PPStructure()
-                logger.info("PP-Structure 引擎初始化成功（兼容模式）")
+                _pp_engine = PPStructureV3(
+                    use_table_recognition=True,
+                    use_formula_recognition=False,
+                    use_chart_recognition=False,
+                    use_seal_recognition=False,
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    lang="ch",
+                )
+                logger.info("PPStructureV3 引擎初始化成功（兼容模式）")
             except Exception as e:
-                logger.warning("PP-Structure 引擎初始化失败: %s: %s", type(e).__name__, e)
+                logger.warning("PPStructureV3 引擎初始化失败: %s: %s", type(e).__name__, e)
                 _pp_engine = None
         except Exception as e:
-            logger.warning("PP-Structure 引擎初始化失败: %s: %s", type(e).__name__, e)
+            logger.warning("PPStructureV3 引擎初始化失败: %s: %s", type(e).__name__, e)
             _pp_engine = None
     return _pp_engine
 
 
 def extract_tables(img_array) -> list:
-    """用 PP-Structure 从图像中抽取表格区域，返回 table dict 列表。
+    """用 PPStructureV3 从图像中抽取表格区域，返回 table dict 列表。
+
+    3.x 结果格式：LayoutParsingResultV2
+      - result["table_res_list"]: list of dict, each has:
+        - "pred_html": 表格 HTML 字符串
+        - "cell_box_list": 单元格坐标列表
 
     每个 table dict 包含：
     - html: 表格 HTML 结构字符串
     - cells: [[row_val, ...], ...] 二维数组（从 HTML 解析）
-    - bbox: [x1, y1, x2, y2] 表格区域坐标
+    - bbox: [x1, y1, x2, y2] 表格区域坐标（从 cell_box_list 推算）
 
     缺引擎或异常时返回空列表（不阻断 OCR 文本）。
     """
@@ -141,30 +176,53 @@ def extract_tables(img_array) -> list:
         return []
     out: list = []
     try:
-        results = engine(img_array)
+        results = list(engine.predict(img_array))
         if not results:
             return out
-        for region in results:
-            if not isinstance(region, dict):
+        res = results[0]
+        # 3.x: table_res_list
+        table_res_list = res.get("table_res_list", []) if isinstance(res, dict) else []
+        if not table_res_list:
+            return out
+        for table_res in table_res_list:
+            if not isinstance(table_res, dict):
                 continue
-            if region.get("type") != "table":
-                continue
-            res = region.get("res", {})
-            html = res.get("html", "") if isinstance(res, dict) else ""
-            bbox = region.get("bbox", [0, 0, 0, 0])
+            html = table_res.get("pred_html", "")
             if not html:
                 continue
             parser = TableHTMLParser()
             parser.feed(html)
             cells = parser.rows if parser.rows else []
+            # 从 cell_box_list 推算 bbox
+            cell_boxes = table_res.get("cell_box_list", [])
+            bbox = _compute_bbox(cell_boxes)
             out.append({
                 "html": html,
                 "cells": cells,
                 "bbox": bbox,
             })
     except Exception as e:
-        logger.warning("PP-Structure 表格抽取异常: %s: %s", type(e).__name__, e)
+        logger.warning("PPStructureV3 表格抽取异常: %s: %s", type(e).__name__, e)
     return out
+
+
+def _compute_bbox(cell_boxes) -> list:
+    """从 cell_box_list 推算表格整体 bbox。"""
+    if not cell_boxes:
+        return [0, 0, 0, 0]
+    try:
+        xs1, ys1, xs2, ys2 = [], [], [], []
+        for box in cell_boxes:
+            if len(box) >= 4:
+                xs1.append(float(box[0]))
+                ys1.append(float(box[1]))
+                xs2.append(float(box[2]))
+                ys2.append(float(box[3]))
+        if not xs1:
+            return [0, 0, 0, 0]
+        return [min(xs1), min(ys1), max(xs2), max(ys2)]
+    except (ValueError, TypeError):
+        return [0, 0, 0, 0]
 
 
 def reset():

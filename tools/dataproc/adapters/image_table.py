@@ -1,4 +1,4 @@
-"""图片/规格表/电商长图适配器：opencv 预处理 + PaddleOCR + 阅读顺序 + 长图切片。
+"""图片/规格表/电商长图适配器：opencv 预处理 + PaddleOCR 3.x + 阅读顺序 + 长图切片。
 零 src.*。无文字/低置信标 low_conf，绝不编造。"""
 from __future__ import annotations
 
@@ -57,7 +57,6 @@ def _reading_order(lines):
     """按阅读顺序排序：(min_y, min_x)。"""
     def key(ln):
         box = ln[0]
-        # box 可能是 list[list] 或 np.ndarray
         try:
             ys = [float(p[1]) for p in box]
             xs = [float(p[0]) for p in box]
@@ -68,6 +67,13 @@ def _reading_order(lines):
 
 
 def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
+    """对预处理后的灰度图跑 PaddleOCR 3.x predict()。
+
+    3.x 结果格式：OCRResult (dict 子类)
+      - rec_texts: list[str]
+      - rec_scores: list[float]
+      - dt_polys: list[ndarray]
+    """
     if not run_real_ocr:
         raise OCRDeferred("run_real_ocr=False，图片 OCR 推迟")
     if not paddle_available():
@@ -81,18 +87,18 @@ def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
     for chunk in _slice_long(gray):
         # PaddleOCR 接受 RGB 数组；转回 3 通道
         rgb = np.stack([chunk] * 3, axis=-1)
-        # PaddleOCR 3.x: 使用 predict()，2.x: 使用 ocr(cls=True)
-        # 先尝试 3.x API（predict），降级到 2.x API（ocr）
+        # PaddleOCR 3.x: 使用 predict()
         try:
-            res = list(ocr.predict(rgb))
+            results = list(ocr.predict(rgb))
         except (TypeError, AttributeError):
+            # 兼容 2.x: ocr(cls=True)
             try:
-                res = ocr.ocr(rgb, cls=True)
+                results = ocr.ocr(rgb, cls=True)
             except TypeError:
-                res = ocr.ocr(rgb)
-        if not res:
+                results = ocr.ocr(rgb)
+        if not results:
             continue
-        lines = _extract_lines(res)
+        lines = _extract_lines(results)
         for line in _reading_order(lines):
             try:
                 box, (txt, score) = line
@@ -111,20 +117,16 @@ def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
 def _extract_lines(res):
     """从 PaddleOCR 结果中提取行列表（兼容 2.x 和 3.x 格式）。
 
+    3.x: res = [OCRResult(dict子类)], OCRResult 有 rec_texts/rec_scores/dt_polys
     2.x: res = [[[box, (txt, score)], ...]]
-    3.x: res = [{'rec_texts': [...], 'rec_scores': [...], 'dt_polys': [...]}, ...]
-         或 res = [dict_with_rec_texts]
     """
     if not res:
         return []
-    # 2.x 格式：res[0] 是列表
-    if isinstance(res[0], list):
-        return res[0]
-    # 3.x 格式：res 是 dict 或 dict 列表
-    if isinstance(res, dict):
-        res = [res]
-    if isinstance(res, list) and res and isinstance(res[0], dict):
-        d = res[0]
+    first = res[0]
+
+    # 3.x 格式：OCRResult 是 dict 子类，有 rec_texts 键
+    if isinstance(first, dict) and "rec_texts" in first:
+        d = first
         texts = d.get("rec_texts", [])
         scores = d.get("rec_scores", [])
         polys = d.get("dt_polys", [])
@@ -135,6 +137,11 @@ def _extract_lines(res):
             box = polys[i] if i < len(polys) else [[0, 0], [0, 0], [0, 0], [0, 0]]
             lines.append((box, (txt, score)))
         return lines
+
+    # 2.x 格式：res[0] 是列表
+    if isinstance(first, list):
+        return first[0] if first and isinstance(first[0], list) else first
+
     return []
 
 
@@ -149,7 +156,7 @@ class ImageTableAdapter:
                 arr = np.array(pil.convert("RGB"))
             gray = _preprocess(arr)
             text, low_conf = _ocr_image(gray, run_real_ocr)
-            # PP-Structure 表格抽取（共享模块，对原图 RGB 跑版面分析+表格识别）
+            # PP-StructureV3 表格抽取（共享模块，对原图 RGB 跑版面分析+表格识别）
             tables = []
             if run_real_ocr and paddle_available() and get_ppstructure() is not None:
                 tables = _extract_tables_ppstructure(arr)

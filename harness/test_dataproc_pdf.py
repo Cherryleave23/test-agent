@@ -78,19 +78,23 @@ def main():
             os.unlink(p)
 
     # I11：扫描件 + RUN_REAL_OCR=1 缺依赖 → 显式报错
-    p2 = _make_temp_pdf()
-    try:  # P1-13: try/finally 确保临时文件清理
-        _scanned_pdf(p2)
-        try:
-            PDFAdapter().extract(p2, run_real_ocr=True)
-            fails.append("I11: 缺 PaddleOCR 却未报错（应抛 OCRDependencyMissing）")
-        except OCRDependencyMissing:
-            print("[PASS] I11")
-        except Exception as e:
-            fails.append(f"I11: 抛错类型错误 {type(e).__name__}: {e}")
-    finally:
-        if os.path.exists(p2):
-            os.unlink(p2)
+    # 仅在 PaddleOCR 未安装时测试此场景；已安装时跳过
+    if paddle_available():
+        print("[SKIP] I11 (PaddleOCR 已安装，此测试仅验证缺依赖场景)")
+    else:
+        p2 = _make_temp_pdf()
+        try:  # P1-13: try/finally 确保临时文件清理
+            _scanned_pdf(p2)
+            try:
+                PDFAdapter().extract(p2, run_real_ocr=True)
+                fails.append("I11: 缺 PaddleOCR 却未报错（应抛 OCRDependencyMissing）")
+            except OCRDependencyMissing:
+                print("[PASS] I11")
+            except Exception as e:
+                fails.append(f"I11: 抛错类型错误 {type(e).__name__}: {e}")
+        finally:
+            if os.path.exists(p2):
+                os.unlink(p2)
 
     # I8/I9：真实 OCR 门控
     if real_ok:

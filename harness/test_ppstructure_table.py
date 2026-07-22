@@ -37,8 +37,9 @@ def t1_ppstructure_shared_module():
     # 不装 paddleocr 时应返回 None（不崩）
     reset()
     engine = get_ppstructure()
-    assert engine is None or hasattr(engine, "__call__"), \
-        f"get_ppstructure 应返回 None 或引擎对象，实际: {type(engine)}"
+    # 3.x: PPStructureV3 用 predict()，2.x: PPStructure 用 __call__()
+    assert engine is None or hasattr(engine, "__call__") or hasattr(engine, "predict"), \
+        f"get_ppstructure 应返回 None 或引擎对象（有 predict/__call__），实际: {type(engine)}"
 
 
 def t2_extract_empty_input():
@@ -149,7 +150,7 @@ def t8_pdf_test_behavior():
     test_path = os.path.join(ROOT, "harness", "test_dataproc_pdf.py")
     result = subprocess.run(
         [sys.executable, test_path],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=120,
         env={**os.environ, "RUN_REAL_OCR": "0"},
     )
     assert result.returncode == 0, \

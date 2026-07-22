@@ -1,4 +1,4 @@
-"""PDF 适配器：数字直抽 + 扫描件 PaddleOCR（+ 可选 PP-Structure 表格）。零 src.*。"""
+"""PDF 适配器：数字直抽 + 扫描件 PaddleOCR 3.x（+ 可选 PP-StructureV3 表格）。零 src.*。"""
 from __future__ import annotations
 
 import logging
@@ -40,7 +40,13 @@ def _render_pages(path: str):
 
 
 def _ocr_images(images, run_real_ocr: bool):
-    """对一组图像跑 PaddleOCR + PP-Structure 表格识别；返回 (text, tables, low_conf)。"""
+    """对一组图像跑 PaddleOCR 3.x predict() + PP-StructureV3 表格识别。
+
+    3.x 结果格式：OCRResult (dict 子类)
+      - rec_texts: list[str]
+      - rec_scores: list[float]
+      - dt_polys: list[ndarray]
+    """
     if not run_real_ocr:
         raise OCRDeferred("run_real_ocr=False，PDF 扫描件 OCR 推迟")
     if not paddle_available():
@@ -50,19 +56,26 @@ def _ocr_images(images, run_real_ocr: bool):
     ocr = get_paddle_ocr()
     if ocr is None:
         raise OCRDependencyMissing("PaddleOCR 未安装，无法对扫描件 PDF 做 OCR（RUN_REAL_OCR=1 但缺依赖）")
-    # PP-Structure 引擎（单例，缺依赖返回 None，保持 table_pending）
+    # PP-StructureV3 引擎（单例，缺依赖返回 None，保持 table_pending）
     pp_engine = get_ppstructure()
     texts: list = []
     tables: list = []
     low_conf = False
     for img in images:
         arr = np.array(img.convert("RGB"))
-        res = ocr.ocr(arr, cls=True)
+        # PaddleOCR 3.x: predict()
+        try:
+            results = list(ocr.predict(arr))
+        except (TypeError, AttributeError):
+            # 兼容 2.x: ocr(cls=True)
+            try:
+                results = ocr.ocr(arr, cls=True)
+            except TypeError:
+                results = ocr.ocr(arr)
         page_lines: list = []
-        if res:
-            for line in res[0] or []:
-                if not line:
-                    continue
+        if results:
+            lines = _extract_lines(results)
+            for line in lines:
                 try:
                     box, (txt, score) = line
                 except (ValueError, TypeError):
@@ -74,7 +87,7 @@ def _ocr_images(images, run_real_ocr: bool):
         if not page_lines:
             low_conf = True
         texts.append("\n".join(page_lines))
-        # PP-Structure 表格抽取（共享模块，异常不阻断 OCR 文本）
+        # PP-StructureV3 表格抽取（共享模块，异常不阻断 OCR 文本）
         if pp_engine is not None:
             page_tables = _extract_tables_ppstructure(arr)
             tables.extend(page_tables)
@@ -82,8 +95,39 @@ def _ocr_images(images, run_real_ocr: bool):
     return text, tables, low_conf
 
 
+def _extract_lines(res):
+    """从 PaddleOCR 结果中提取行列表（兼容 2.x 和 3.x 格式）。
+
+    3.x: res = [OCRResult(dict子类)], OCRResult 有 rec_texts/rec_scores/dt_polys
+    2.x: res = [[[box, (txt, score)], ...]]
+    """
+    if not res:
+        return []
+    first = res[0]
+
+    # 3.x 格式：OCRResult 是 dict 子类，有 rec_texts 键
+    if isinstance(first, dict) and "rec_texts" in first:
+        d = first
+        texts = d.get("rec_texts", [])
+        scores = d.get("rec_scores", [])
+        polys = d.get("dt_polys", [])
+        lines = []
+        for i in range(len(texts)):
+            txt = texts[i] if i < len(texts) else ""
+            score = float(scores[i]) if i < len(scores) else 0.0
+            box = polys[i] if i < len(polys) else [[0, 0], [0, 0], [0, 0], [0, 0]]
+            lines.append((box, (txt, score)))
+        return lines
+
+    # 2.x 格式：res[0] 是列表
+    if isinstance(first, list):
+        return first[0] if first and isinstance(first[0], list) else first
+
+    return []
+
+
 class PDFAdapter:
-    """PDF 适配器。数字 PDF 直抽（无重依赖）；扫描件走 PaddleOCR。"""
+    """PDF 适配器。数字 PDF 直抽（无重依赖）；扫描件走 PaddleOCR 3.x。"""
     kind = "pdf"
 
     def extract(self, path: str, run_real_ocr: bool = False) -> AdapterResult:

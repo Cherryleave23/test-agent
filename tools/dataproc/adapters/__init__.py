@@ -1,10 +1,15 @@
 """dataproc OCR 适配器包（零 src.* 依赖）。
 
+PaddleOCR 3.x API：
+  - PaddleOCR(engine="paddle_static", engine_config={"run_mode": "paddle"})
+  - ocr.predict(image) → list[OCRResult]
+  - PPStructureV3 替代旧版 PPStructure
+
 - `PDFAdapter`：数字 PDF 用 pypdf 直抽文本层（无需重依赖，I7 默认绿）；扫描件（无文本层）
-  走 PaddleOCR，表格走 PP-Structure（可选装）。
-- `ImageTableAdapter`：产品图/规格表/电商长图 → opencv 预处理 + PaddleOCR + 阅读顺序 +
-  PP-Structure + 长图纵向切片。
-- OCR 为 Tier1 重依赖（paddlepaddle/paddleocr），端侧可选装；`ocr_available()` 探测，
+  走 PaddleOCR 3.x，表格走 PP-StructureV3（可选装）。
+- `ImageTableAdapter`：产品图/规格表/电商长图 → opencv 预处理 + PaddleOCR 3.x + 阅读顺序 +
+  PP-StructureV3 + 长图纵向切片。
+- OCR 为 Tier1 重依赖（paddlepaddle/paddleocr），端侧可选装；`paddle_available()` 探测，
   缺依赖且真的要 OCR 时显式抛 `OCRDependencyMissing`（I11），不静默、不编造。
 - `run_real_ocr=False`（默认）走 `OCRDeferred` → 调用方保持 ocr_pending 占位（I13）。
 """
