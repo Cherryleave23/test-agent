@@ -43,6 +43,39 @@ wheels:
     size_mb: 30
     modes: [light, full]
 
+  # —— OCR Tier1（P2，端侧可选装）——
+  # 扫描件 PDF / 商品图 / 规格表：PaddleOCR 抽取文字，PP-Structure 抽表格。
+  # 由 DATAPROC_OCR_ENABLED=1 + RUN_REAL_OCR=1 开启；未安装时默认降级为 ocr_pending
+  # 占位（不编造、不崩溃）。paddlepaddle 体积大，configure.ps1 会询问是否拉取。
+  - name: paddlepaddle
+    pip: "paddlepaddle>=2.6.0,<3.0.0"
+    url: ""
+    dest: "wheels/"
+    size_mb: 400
+    modes: [full]
+    optional: true
+
+  - name: paddleocr
+    pip: "paddleocr>=2.7.0,<3.0.0"
+    url: ""
+    dest: "wheels/"
+    size_mb: 30
+    modes: [full]
+    optional: true
+
+  - name: ppstructure
+    # 表格结构抽取（可选增强）；缺省时适配器仅做文字 OCR 并标 table_pending
+    pip: "python-ppstructure>=0.0.4"
+    url: ""
+    dest: "wheels/"
+    size_mb: 20
+    modes: [full]
+    optional: true
+
+  # OCR 适配器运行期轻依赖（归 Tier 2，捆绑安装包，列此仅作声明）：
+  #   opencv-python（图像预处理）、PyMuPDF/fitz（PDF 渲染）、pypdf（数字 PDF 直抽）、numpy
+  # 已包含在 requirements-full.txt。
+
 # 模型权重（HuggingFace）— 仅 full 模式需要
 models:
   - name: bge-small-zh-v1.5

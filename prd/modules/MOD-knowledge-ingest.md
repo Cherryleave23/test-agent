@@ -427,7 +427,7 @@ gui/
 | F6 | `retrieve` 第 4 步放行 `HQ_ENT`：HQ 共享库（ent=`"hq"`）对全部企业可读，且企业间 b_kb 隔离仍成立 | `test_store_hq_retrieve` | ✅ 已修 `store.py`（方案②：回查条件 `ent not in (None, HQ_ENT) and ent != enterprise_id` 才丢弃）+ 回归 F6a–F6d 全绿 |
 | P2-OCR | OCR 适配器（pdf/image_table）：数字 PDF 直抽 I7 + 缺依赖显式报错 I11 + 真实 PaddleOCR/PP-Structure I8–I10/I14–I16（`RUN_REAL_OCR=1` 门控） | `test_dataproc_pdf` / `test_dataproc_ocr` | ✅ 已落地（默认轻量绿跑 + 重依赖门控 + 不编造） |
 | P3-STR | 结构化抽取 + 实体解析：`structurer` 规则兜底 + 工具自带 LLM provider 接线 + resolve（reg/tuple） | `test_dataproc_resolver` | ✅ 已落地（RES1–RES7 全绿，锚定原文不编造） |
-| G1–G5 | GUI 工作台：仓库/树嵌套/上传/标记去重/触发产 bundle（**见「〇·P5」**） | `test_gui_backend` | ✅ 后端 G1–G5 绿 + 前端 React SPA 构建通过 + Tauri 壳配置 |
+| G1–G5 | GUI 工作台：仓库/树嵌套/上传/标记去重/触发产 bundle（**见「〇·P5」**） | `test_gui_backend` | ✅ 后端 G1–G5 绿 + 前端 React SPA 构建通过（`pnpm --filter dataproc-gui build` 验证产出 dist）+ **Tauri 壳配置已补全**：`icons/icon.png` 生成、`pnpm-workspace.yaml` 补齐（修复 `pnpm --filter` 解析失败）、`VITE_API_BASE` 接线验证正确（同源回退）；真实 `pnpm tauri build` 为**环境门控**——需打包机装 `webkit2gtk-4.1`（沙箱无此系统依赖，未跑通，非代码缺陷，README 已给构建机一键清单） |
 
 ---
 

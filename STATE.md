@@ -80,6 +80,8 @@ RUN_REAL_MODEL=1 python3.11 scripts/run_harness.py
 | 消歧/全链路 Prompt Caching（优化 C + 全阶段） | **已实施**（`46a8737` 消歧前缀 + `1216b85` 全阶段：ORDER BY / RAG顺序 / 命中监控 / 预热） |
 | MOD-kb 嵌入缓存 | 中等收益，独立模块（未启动） |
 | MOD-deploy 三项 P0 | **已落地**（`a572940`：密钥环境变量化 / 出入站白名单 / 健康数据加密；`d86b190`：修复 scanner 误报回归） |
+| Tauri 桌面壳真实打包 | **代码侧已补全、环境门控**：`icons/icon.png` 生成 + `pnpm-workspace.yaml` 补齐（`pnpm --filter` 解析失败已修）+ `VITE_API_BASE` 接线验证正确 + 前端 `vite build` 链验证通过；真实 `pnpm tauri build` 需打包机装 `webkit2gtk-4.1`（系统依赖，沙箱无，未跑通非代码缺陷，README 已给构建机一键清单） |
+| 本地提交领先 origin/main | 14 个提交未推送（`7b19f82`..`HEAD`），`git push` 受 `test-agent` GitHub 凭证缺失阻塞（见 §7 Git 鉴权） |
 
 ## 7. 环境要点（避坑）
 
