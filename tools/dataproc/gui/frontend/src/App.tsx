@@ -337,16 +337,6 @@ export default function App() {
           onMkdir={onMkdir}
           onRmdir={onRmdir}
         />
-        <section className="center">
-          <ProcessPanel
-            busy={busy}
-            hasSelection={selFiles.size > 0 || selFolders.size > 0}
-            outputDir={currentOutputDir}
-            status={procStatus}
-            onProcess={doProcess}
-            onClearMarkers={onClearMarkers}
-          />
-        </section>
         <ProcessedPanel markers={markers} bundle={bundle} />
         <section className="reserved" />
       </div>
@@ -358,6 +348,14 @@ export default function App() {
             busy={busy}
             onFiles={onFiles}
             onOsPaths={onOsPaths}
+          />
+          <ProcessPanel
+            busy={busy}
+            hasSelection={selFiles.size > 0 || selFolders.size > 0}
+            outputDir={currentOutputDir}
+            status={procStatus}
+            onProcess={doProcess}
+            onClearMarkers={onClearMarkers}
           />
         </div>
         <div className="bottom-right">
