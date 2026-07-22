@@ -257,7 +257,7 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
                     ).to_dict())
                     if namespace == "hq":
                         hq_products.append(HQProductRecord(
-                            kind="milk", fields=fields, meta={"vendor": ent_id}).to_dict())
+                            kind=prod_kind, fields=fields, meta={"vendor": ent_id}).to_dict())
                     corpus.append(CorpusRecord(
                         part=part, kind="product_text", title=os.path.basename(rel),
                         content=body, product_uid=uid,
@@ -268,8 +268,10 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
                     if product_dict:
                         products.append(product_dict)
                         if namespace == "hq":
+                            # P2-N6: 从 product_dict 推断 kind，不再硬编码 "milk"
+                            hq_kind = product_dict.get("kind", "milk")
                             hq_products.append(HQProductRecord(
-                                kind="milk", fields=product_dict["fields"],
+                                kind=hq_kind, fields=product_dict["fields"],
                                 meta={"vendor": ent_id}).to_dict())
                     corpus.append(CorpusRecord(
                         part=part, kind=kind, title=os.path.basename(rel), content=content,

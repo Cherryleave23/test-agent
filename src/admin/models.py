@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from pydantic import BaseModel, field_validator, Field
 
-from common.db import connect
+from common.db import connect, db_tx
 
 
 ADMIN_SCHEMA = """
@@ -31,10 +31,9 @@ ALLOWED_TABLES = frozenset({"products_milk", "products_nutrition"})
 
 
 def init_admin_db(db_path: str):
-    """初始化 admin 表（幂等）。"""
-    with connect(db_path) as conn:
+    """初始化 admin 表（幂等）。P2-N1: 使用 db_tx 确保连接关闭。"""
+    with db_tx(db_path) as conn:
         conn.executescript(ADMIN_SCHEMA)
-        conn.commit()
 
 
 class LLMConfigUpdate(BaseModel):
@@ -55,9 +54,17 @@ class LLMConfigUpdate(BaseModel):
 
 
 class StoreCreate(BaseModel):
-    enterprise_id: str = Field(min_length=1)
-    enterprise_name: str = Field(min_length=1)
+    enterprise_id: str = Field(min_length=1, max_length=64)
+    enterprise_name: str = Field(min_length=1, max_length=128)
     db_path: str = "instance.db"
+
+    @field_validator("db_path")
+    @classmethod
+    def validate_db_path(cls, v: str) -> str:
+        """P2-N2: 拒绝路径遍历。"""
+        if ".." in v:
+            raise ValueError("db_path 不允许包含 ..")
+        return v
 
 
 class EmployeeCreate(BaseModel):

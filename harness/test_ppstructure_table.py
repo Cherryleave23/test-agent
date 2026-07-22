@@ -61,6 +61,21 @@ def t3_html_parser_from_shared():
     assert parser.rows[1] == ["段位", "1段"], f"第 2 行不匹配: {parser.rows[1]}"
 
 
+def t3b_html_parser_colspan_rowspan():
+    """T3b: TableHTMLParser 支持 colspan/rowspan（P2-N5 补充测试）。"""
+    from dataproc.adapters._ppstructure import TableHTMLParser
+    html = '''<table>
+    <tr><td colspan="2">合并表头</td></tr>
+    <tr><td>A</td><td>B</td></tr>
+    </table>'''
+    parser = TableHTMLParser()
+    parser.feed(html)
+    assert len(parser.rows) == 2, f"应解析出 2 行，实际: {len(parser.rows)}"
+    assert len(parser.rows[0]) == 2, f"colspan 行应有 2 列，实际: {len(parser.rows[0])}"
+    assert parser.rows[0][0] == "合并表头", f"colspan 内容应填充，实际: {parser.rows[0]}"
+    assert parser.rows[1] == ["A", "B"], f"第二行不匹配: {parser.rows[1]}"
+
+
 def t4_classify_ptype():
     """T4: classify_ptype 正确推断奶粉类型。"""
     from dataproc.classifier import classify_ptype
@@ -189,6 +204,7 @@ CHECKS = [
     ("T1 PP-Structure 共享模块可导入", t1_ppstructure_shared_module),
     ("T2 extract_tables 无引擎返回空列表", t2_extract_empty_input),
     ("T3 TableHTMLParser 从共享模块解析 HTML", t3_html_parser_from_shared),
+    ("T3b TableHTMLParser colspan/rowspan 支持", t3b_html_parser_colspan_rowspan),
     ("T4 classify_ptype 推断奶粉类型", t4_classify_ptype),
     ("T5 classify_category 推断商品大类", t5_classify_category),
     ("T6 classify 返回完整分类结构", t6_classify_full),

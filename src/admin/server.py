@@ -165,6 +165,8 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
         # 空 api_key 不覆盖已有 key（避免误清空）
         if update.api_key:
             data["llm"]["api_key"] = update.api_key
+            # P2-N4: api_key 明文写入 YAML，建议通过 AGENT_LLM_API_KEY 环境变量覆盖
+            logger.warning("LLM api_key 已明文写入 %s，建议设置 AGENT_LLM_API_KEY 环境变量替代", abs_path)
         data["llm"]["temperature"] = update.temperature
         data["llm"]["max_tokens"] = update.max_tokens
         with open(abs_path, "w", encoding="utf-8") as f:
@@ -212,7 +214,13 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
         except ValueError as e:
             raise HTTPException(400, str(e))
         store = _get_store()
-        store.confirm_product(product_id, value, table, cfg.enterprise_id)
+        try:
+            store.confirm_product(product_id, value, table, cfg.enterprise_id)
+        except PermissionError as e:
+            logger.warning("跨租户操作被拒绝: %s", e)
+            raise HTTPException(403, "无权操作该商品")
+        except ValueError as e:
+            raise HTTPException(404, str(e))
         logger.info("商品确认: id=%s table=%s ent=%s", product_id, table, cfg.enterprise_id)
         return {"status": "ok"}
 
@@ -223,7 +231,13 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
         except ValueError as e:
             raise HTTPException(400, str(e))
         store = _get_store()
-        store.delete_product(product_id, table, cfg.enterprise_id)
+        try:
+            store.delete_product(product_id, table, cfg.enterprise_id)
+        except PermissionError as e:
+            logger.warning("跨租户操作被拒绝: %s", e)
+            raise HTTPException(403, "无权操作该商品")
+        except ValueError as e:
+            raise HTTPException(404, str(e))
         logger.info("商品删除: id=%s table=%s ent=%s", product_id, table, cfg.enterprise_id)
         return {"status": "ok"}
 
@@ -275,8 +289,14 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
 
     @app.delete("/api/employees/{emp_id}", dependencies=[Depends(_verify_token)])
     def delete_employee(emp_id: int):
+        # P1-N1: 校验 enterprise_id 防跨租户删除
         with db_tx(admin_db) as conn:
-            conn.execute("DELETE FROM admin_employees WHERE id=?", (emp_id,))
+            cur = conn.execute(
+                "DELETE FROM admin_employees WHERE id=? AND enterprise_id=?",
+                (emp_id, cfg.enterprise_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(404, "员工不存在或无权操作")
         return {"status": "ok"}
 
     # ===== API: 微信网关绑定 =====
@@ -316,11 +336,15 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
 
     @app.delete("/api/gateway/{emp_id}", dependencies=[Depends(_verify_token)])
     def unbind_gateway(emp_id: int):
+        # P1-N1: 校验 enterprise_id 防跨租户解绑
         with db_tx(admin_db) as conn:
-            conn.execute(
-                "UPDATE admin_employees SET bot_token=NULL, bound_at=NULL WHERE id=?",
-                (emp_id,),
+            cur = conn.execute(
+                "UPDATE admin_employees SET bot_token=NULL, bound_at=NULL "
+                "WHERE id=? AND enterprise_id=?",
+                (emp_id, cfg.enterprise_id),
             )
+            if cur.rowcount == 0:
+                raise HTTPException(404, "网关绑定不存在或无权操作")
         logger.info("网关解绑: emp_id=%s", emp_id)
         return {"status": "ok"}
 
@@ -355,6 +379,10 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
         b = baby_store.get_baby(baby_id)
         if b is None:
             raise HTTPException(404, f"宝宝档案不存在: {baby_id}")
+        # P1-N2: 校验 enterprise_id 防跨租户访问
+        if b.enterprise_id != cfg.enterprise_id:
+            logger.warning("跨租户宝宝档案访问被拒绝: baby_id=%s ent=%s", baby_id, cfg.enterprise_id)
+            raise HTTPException(403, "无权访问该宝宝档案")
         # 受限字段：不返回 allergens / medical_history / feeding_history 等敏感详情
         return {
             "baby_id": b.baby_id,

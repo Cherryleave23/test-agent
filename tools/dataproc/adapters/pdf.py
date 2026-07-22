@@ -6,27 +6,9 @@ import os
 
 from . import MIN_DIGITAL_TEXT, OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
 from ._ppstructure import extract_tables as _extract_tables_ppstructure, get_ppstructure
+from ._paddle_ocr import get_paddle_ocr
 
 logger = logging.getLogger(__name__)
-
-# 模块级单例：避免每次调用重新初始化 PaddleOCR 引擎
-_ocr_engine = None
-_ocr_initialized = False
-
-
-def _get_paddle_ocr():
-    """获取 PaddleOCR 引擎单例。首次调用初始化，后续复用。"""
-    global _ocr_engine, _ocr_initialized
-    if _ocr_initialized:
-        return _ocr_engine
-    _ocr_initialized = True
-    try:
-        from paddleocr import PaddleOCR
-        _ocr_engine = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
-    except Exception as e:
-        logger.warning("PaddleOCR 实例初始化失败: %s: %s", type(e).__name__, e)
-        _ocr_engine = None
-    return _ocr_engine
 
 
 def _digital_text(path: str) -> str:
@@ -65,7 +47,7 @@ def _ocr_images(images, run_real_ocr: bool):
         raise OCRDependencyMissing("PaddleOCR 未安装，无法对扫描件 PDF 做 OCR（RUN_REAL_OCR=1 但缺依赖）")
 
     import numpy as np
-    ocr = _get_paddle_ocr()
+    ocr = get_paddle_ocr()
     if ocr is None:
         raise OCRDependencyMissing("PaddleOCR 未安装，无法对扫描件 PDF 做 OCR（RUN_REAL_OCR=1 但缺依赖）")
     # PP-Structure 引擎（单例，缺依赖返回 None，保持 table_pending）

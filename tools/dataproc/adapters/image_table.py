@@ -8,6 +8,7 @@ import numpy as np
 
 from . import OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
 from ._ppstructure import extract_tables as _extract_tables_ppstructure, get_ppstructure
+from ._paddle_ocr import get_paddle_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -15,25 +16,6 @@ logger = logging.getLogger(__name__)
 SLICE_RATIO = 3.0
 SLICE_H = 1200          # 单切片像素高
 SLICE_OVERLAP = 120     # 切片重叠，避免切断行
-
-# 模块级单例：避免每次调用重新初始化 PaddleOCR 引擎
-_ocr_engine = None
-_ocr_initialized = False
-
-
-def _get_paddle_ocr():
-    """获取 PaddleOCR 引擎单例。首次调用初始化，后续复用。"""
-    global _ocr_engine, _ocr_initialized
-    if _ocr_initialized:
-        return _ocr_engine
-    _ocr_initialized = True
-    try:
-        from paddleocr import PaddleOCR
-        _ocr_engine = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
-    except Exception as e:
-        logger.warning("PaddleOCR 实例初始化失败: %s: %s", type(e).__name__, e)
-        _ocr_engine = None
-    return _ocr_engine
 
 
 def _get_cv2():
@@ -87,7 +69,7 @@ def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
     if not paddle_available():
         raise OCRDependencyMissing("PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
 
-    ocr = _get_paddle_ocr()
+    ocr = get_paddle_ocr()
     if ocr is None:
         raise OCRDependencyMissing("PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
     texts: list = []
@@ -99,7 +81,11 @@ def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
         if not res or not res[0]:
             continue
         for line in _reading_order(res[0]):
-            box, (txt, score) = line
+            try:
+                box, (txt, score) = line
+            except (ValueError, TypeError):
+                logger.warning("跳过无法解析的 OCR 行: %r", line)
+                continue
             if score < 0.5:
                 low_conf = True
             texts.append(txt)

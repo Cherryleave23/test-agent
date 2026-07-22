@@ -14,6 +14,7 @@ import json
 import math
 import os
 import sqlite3
+import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -23,6 +24,8 @@ from common.db import connect, db_tx
 from common.embeddings import embed, DIM, _domain_tokens
 from common.rerank import get_reranker
 from kb.models import MilkProduct, NutritionProduct
+
+logger = logging.getLogger(__name__)
 
 HQ_ENT = "hq"  # Chroma metadata 中 HQ 共享库的 enterprise_id 标记
 
@@ -265,8 +268,9 @@ class KnowledgeStore:
         if ids:
             try:
                 self.collection.delete(ids=[str(i) for i in ids])
-            except Exception:
-                pass
+            except Exception as e:
+                # P2-N7: 记录警告而非静默忽略，便于排查孤儿向量
+                logger.warning("Chroma 向量删除失败 (corpus ids=%s): %s: %s", ids, type(e).__name__, e)
 
     # ---------- 写：企业自有 RAG 知识（采集归一后的文本源：web/text/pdf/...）----------
     def add_knowledge(self, enterprise_id: str, title: str, content: str,
