@@ -3,12 +3,18 @@ import json
 import os
 
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 from . import repos, tree, upload, markers, process as proc
 from .models import RepoCreate
 
 app = FastAPI(title="dataproc GUI backend", version="0.1.0")
+
+# 本地 Web 模式：构建后的前端 dist 存在时，由后端同源托管（见文件末尾 spa_fallback 兜底路由）。
+_DIST = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # .../gui
+    "frontend", "dist",
+)
 
 
 @app.get("/repos")
@@ -75,3 +81,15 @@ def get_bundle(name: str):
         raise HTTPException(status_code=404, detail="尚未生成 bundle")
     with open(bp, encoding="utf-8") as f:
         return JSONResponse(json.load(f), media_type="application/json")
+
+
+# SPA 兜底路由（必须最后注册）：API 路由已先注册并优先匹配，未命中才回退到
+# 静态资源 / SPA index.html。仅本地 Web 模式（dist 存在）启用。
+if os.path.isdir(_DIST):
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        cand = os.path.join(_DIST, full_path)
+        if full_path and os.path.isfile(cand):
+            return FileResponse(cand)
+        return FileResponse(os.path.join(_DIST, "index.html"))

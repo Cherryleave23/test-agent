@@ -1,0 +1,97 @@
+:root {
+  --bg: #0f1216;
+  --panel: #171b21;
+  --panel2: #1f252e;
+  --line: #2a313c;
+  --text: #e6e9ee;
+  --muted: #8b95a3;
+  --accent: #4f8cff;
+  --accent2: #2bd4a8;
+  --warn: #ffb454;
+  --danger: #ff6b6b;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+.repobar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 700; letter-spacing: 1px; color: var(--accent); }
+.repobar select, .repobar input, .repobar button {
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px;
+}
+.repobar button { cursor: pointer; }
+.repobar button:hover { border-color: var(--accent); }
+.newrepo { display: inline-flex; gap: 6px; }
+.cur-ent { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+.msg { padding: 6px 16px; font-size: 12px; color: var(--muted); background: #12161b; }
+
+.main { display: flex; flex: 1; min-height: 0; }
+.tree, .processed {
+  width: 320px; background: var(--panel); border-right: 1px solid var(--line);
+  overflow: auto; padding: 10px;
+}
+.processed { border-right: none; border-left: 1px solid var(--line); width: 300px; }
+.center { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 12px; overflow: auto; }
+
+.tree-head, .processed-head, .process-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 600; margin-bottom: 8px; color: var(--text);
+}
+.tree-head button { background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 6px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
+
+.crumbs { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.crumbs a { color: var(--accent); cursor: pointer; }
+.crumbs a:hover { text-decoration: underline; }
+
+ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
+.folder, .file { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; }
+.folder:hover, .file:hover { background: var(--panel2); }
+.folder a, .file span { cursor: pointer; }
+.ficon { opacity: 0.8; }
+.fsize { margin-left: auto; color: var(--muted); font-size: 11px; }
+.empty { color: var(--muted); font-size: 12px; padding: 6px; }
+
+.dropzone {
+  border: 2px dashed var(--line); border-radius: 14px; padding: 36px;
+  text-align: center; cursor: pointer; color: var(--muted); transition: 0.15s;
+  background: linear-gradient(180deg, #141821, #10141a);
+}
+.dropzone.over { border-color: var(--accent); color: var(--text); background: #16202e; }
+.dropzone.disabled { cursor: default; opacity: 0.5; }
+.dz-title { font-size: 15px; color: var(--text); margin-bottom: 6px; }
+.dz-sub { font-size: 12px; }
+
+.process button {
+  display: block; width: 100%; margin: 6px 0; padding: 10px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+  cursor: pointer; font-size: 14px;
+}
+.process button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.process button:disabled { opacity: 0.5; cursor: not-allowed; }
+.process .hint { font-size: 11px; color: var(--muted); }
+
+.bundle-sum { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 12px; }
+.kinds { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.kind { background: #11202c; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; font-size: 11px; }
+.kind-product_text { color: var(--accent); }
+.kind-article { color: var(--accent2); }
+.kind-ingredient { color: var(--warn); }
+
+.markers { margin-top: 10px; }
+.marker { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 4px; }
+.marker .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.marker.processed .dot { background: var(--accent2); }
+.marker.failed .dot { background: var(--danger); }
+.mpath { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.mstatus { color: var(--muted); }
