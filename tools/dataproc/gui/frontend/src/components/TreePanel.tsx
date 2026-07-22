@@ -1,5 +1,7 @@
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import ContextMenu from "./ContextMenu";
+
+const LS_KEY = "dataproc_tree_expanded";
 
 interface TreeData {
   path: string;
@@ -22,10 +24,10 @@ interface Props {
   selFiles: Set<string>;
   selFolders: Set<string>;
   processedPaths: Set<string>;
-  onNavigate: (path: string) => void;
   onToggleFile: (path: string) => void;
   onToggleFolder: (path: string) => void;
   onSelectAll: () => void;
+  onSetCurrentFolder: (path: string) => void;
   onMkdir: (parentPath: string, folderName: string) => void;
   onRmdir: (folderPath: string) => void;
   onDeleteFile?: (filePath: string) => void;
@@ -40,38 +42,78 @@ function formatSize(n: number) {
   return (n / (1024 * 1024)).toFixed(1) + " MB";
 }
 
-/** 构建嵌套树结构 */
-function buildTree(folders: { name: string; path: string }[], files: { name: string; path: string; size: number }[]) {
+/** 构建嵌套树结构（基于完整数据） */
+function buildTree(
+  folders: { name: string; path: string }[],
+  files: { name: string; path: string; size: number }[]
+): { children: any[]; files: any[] } {
   const root: any = { name: "", path: "", children: [], files: [] };
   const map: Record<string, any> = { "": root };
 
+  // 先创建所有文件夹节点
+  (folders || []).forEach((f) => {
+    if (!f || !f.path) return;
+    if (!map[f.path]) {
+      map[f.path] = { name: f.name, path: f.path, children: [], files: [] };
+    }
+  });
+
+  // 建立父子关系
   (folders || []).forEach((f) => {
     if (!f || !f.path) return;
     const parts = f.path.split("/");
-    let parentPath = parts.slice(0, -1).join("/");
-    if (!map[parentPath]) map[parentPath] = { name: "", path: parentPath, children: [], files: [] };
-    map[parentPath].children.push({ name: f.name, path: f.path, children: [], files: [] });
+    const parentPath = parts.slice(0, -1).join("/");
+    if (!map[parentPath]) {
+      map[parentPath] = { name: "", path: parentPath, children: [], files: [] };
+    }
+    map[parentPath].children.push(map[f.path]);
   });
 
+  // 挂文件
   (files || []).forEach((f) => {
     if (!f || !f.path) return;
     const parts = f.path.split("/");
-    let parentPath = parts.slice(0, -1).join("/");
-    if (!map[parentPath]) map[parentPath] = { name: "", path: parentPath, children: [], files: [] };
+    const parentPath = parts.slice(0, -1).join("/");
+    if (!map[parentPath]) {
+      map[parentPath] = { name: "", path: parentPath, children: [], files: [] };
+    }
     map[parentPath].files.push(f);
   });
 
-  return root.children;
+  return { children: root.children, files: root.files };
 }
 
 export default function TreePanel({
-  tree, currentFolder, selFiles, selFolders, processedPaths,
-  onNavigate, onToggleFile, onToggleFolder, onSelectAll, onMkdir, onRmdir,
-  onDeleteFile, onPreviewFile, onOpenExplorer, onMoveItem,
+  tree,
+  currentFolder,
+  selFiles,
+  selFolders,
+  processedPaths,
+  onToggleFile,
+  onToggleFolder,
+  onSelectAll,
+  onSetCurrentFolder,
+  onMkdir,
+  onRmdir,
+  onDeleteFile,
+  onPreviewFile,
+  onOpenExplorer,
+  onMoveItem,
 }: Props) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(LS_KEY);
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
   const [menu, setMenu] = useState<MenuState>({
-    visible: false, x: 0, y: 0, path: "", isFolder: false,
+    visible: false,
+    x: 0,
+    y: 0,
+    path: "",
+    isFolder: false,
   });
   const [dragSrc, setDragSrc] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
@@ -79,6 +121,11 @@ export default function TreePanel({
   const [showMkdir, setShowMkdir] = useState(false);
 
   const treeRef = useRef<HTMLDivElement>(null);
+
+  // 持久化展开状态
+  useEffect(() => {
+    localStorage.setItem(LS_KEY, JSON.stringify(Array.from(expanded)));
+  }, [expanded]);
 
   const toggleExpand = useCallback((path: string) => {
     setExpanded((s) => {
@@ -136,10 +183,33 @@ export default function TreePanel({
     setDragOver(null);
   };
 
+  const handleFolderClick = (path: string, hasChildren: boolean, e: React.MouseEvent) => {
+    // Ctrl+单击 = 仅切换选中，不展开
+    if (e.ctrlKey || e.metaKey) {
+      onToggleFolder(path);
+      onSetCurrentFolder(path);
+      return;
+    }
+    // 普通单击 = 设置当前文件夹 + 切换选中 + 展开/折叠
+    onSetCurrentFolder(path);
+    onToggleFolder(path);
+    if (hasChildren) toggleExpand(path);
+  };
+
+  const handleFileClick = (path: string, e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      onToggleFile(path);
+      return;
+    }
+    onToggleFile(path);
+    if (onPreviewFile) onPreviewFile(path);
+  };
+
   const renderFolder = (f: any, depth: number) => {
     const isExpanded = expanded.has(f.path);
     const isDragOver = dragOver === f.path;
     const hasChildren = f.children.length > 0 || f.files.length > 0;
+    const isSelected = selFolders.has(f.path);
 
     return (
       <li key={f.path}>
@@ -161,12 +231,8 @@ export default function TreePanel({
             }}
           />
           <span
-            className={`tree-name ${selFolders.has(f.path) ? "selected" : ""}`}
-            onClick={() => {
-              onToggleFolder(f.path);
-              onNavigate(f.path);
-              if (hasChildren) toggleExpand(f.path);
-            }}
+            className={`tree-name ${isSelected ? "selected" : ""}`}
+            onClick={(e) => handleFolderClick(f.path, hasChildren, e)}
           >
             {f.name}
           </span>
@@ -183,6 +249,7 @@ export default function TreePanel({
 
   const renderFile = (f: any, depth: number) => {
     const isProcessed = processedPaths.has(f.path);
+    const isSelected = selFiles.has(f.path);
     return (
       <li key={f.path}>
         <div
@@ -193,10 +260,9 @@ export default function TreePanel({
           onContextMenu={(e) => handleContextMenu(e, f.path, false)}
         >
           <span
-            className={`tree-name ${selFiles.has(f.path) ? "selected" : ""}`}
-            onClick={() => onToggleFile(f.path)}
-            onDoubleClick={() => onPreviewFile && onPreviewFile(f.path)}
-            title="双击预览"
+            className={`tree-name ${isSelected ? "selected" : ""}`}
+            onClick={(e) => handleFileClick(f.path, e)}
+            title="单击预览"
           >
             {f.name}
             {isProcessed && <span className="processed-dot" title="已处理">●</span>}
@@ -207,7 +273,7 @@ export default function TreePanel({
     );
   };
 
-  const rootNodes = tree ? buildTree(tree.folders, tree.files) : [];
+  const treeData = tree ? buildTree(tree.folders, tree.files) : { children: [], files: [] };
 
   return (
     <div className="tree" ref={treeRef}>
@@ -249,8 +315,8 @@ export default function TreePanel({
       )}
       {tree ? (
         <ul className="tree-list">
-          {rootNodes.map((f: any) => renderFolder(f, 0))}
-          {tree.files.map((f) => renderFile(f, 0))}
+          {treeData.children.map((f: any) => renderFolder(f, 0))}
+          {treeData.files.map((f: any) => renderFile(f, 0))}
         </ul>
       ) : (
         <div className="empty">暂无仓库</div>

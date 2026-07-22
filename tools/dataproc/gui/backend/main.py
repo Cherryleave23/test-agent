@@ -102,6 +102,15 @@ def get_tree(name: str, path: str = ""):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/tree/full")
+def get_tree_full(name: str):
+    """递归返回仓库完整树（所有层级），供 Obsidian 风格前端渲染。"""
+    try:
+        return tree.list_tree_full(name)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/tree/mkdir")
 def make_dir(name: str = Form(...), parent_path: str = Form(""), folder_name: str = Form(...)):
     try:

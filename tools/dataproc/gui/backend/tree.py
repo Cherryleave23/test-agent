@@ -7,6 +7,7 @@ from .repos import get_repo
 
 
 def list_tree(name: str, path: str = "", base: str = None) -> dict:
+    """返回指定路径下的直接子项（文件夹+文件）。"""
     repo_dir, _meta = get_repo(name, base)
     target = os.path.join(repo_dir, path) if path else repo_dir
     target = os.path.normpath(target)
@@ -26,6 +27,37 @@ def list_tree(name: str, path: str = "", base: str = None) -> dict:
         else:
             files.append({"name": entry, "path": rel, "size": os.path.getsize(full)})
     return {"path": path, "folders": folders, "files": files, "top_folders": TOP_FOLDERS}
+
+
+def list_tree_full(name: str, base: str = None) -> dict:
+    """递归返回仓库完整树结构（所有层级的文件和文件夹）。
+
+    供前端 Obsidian 风格展开/折叠渲染使用。
+    """
+    repo_dir, _meta = get_repo(name, base)
+    if not os.path.isdir(repo_dir):
+        raise FileNotFoundError("仓库不存在")
+
+    all_folders, all_files = [], []
+
+    def walk(dir_path: str):
+        try:
+            entries = sorted(os.listdir(dir_path))
+        except OSError:
+            return
+        for entry in entries:
+            if entry.startswith("."):
+                continue
+            full = os.path.join(dir_path, entry)
+            rel = os.path.relpath(full, repo_dir).replace(os.sep, "/")
+            if os.path.isdir(full):
+                all_folders.append({"name": entry, "path": rel})
+                walk(full)
+            else:
+                all_files.append({"name": entry, "path": rel, "size": os.path.getsize(full)})
+
+    walk(repo_dir)
+    return {"path": "", "folders": all_folders, "files": all_files, "top_folders": TOP_FOLDERS}
 
 
 def mkdir(name: str, parent_path: str, folder_name: str, base: str = None) -> dict:

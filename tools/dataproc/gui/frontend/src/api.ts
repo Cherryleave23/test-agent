@@ -33,6 +33,8 @@ export const api = {
   },
   getTree: (name: string, path = "") =>
     req("GET", `/tree?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`),
+  getTreeFull: (name: string) =>
+    req("GET", `/tree/full?name=${encodeURIComponent(name)}`),
   mkdir: (name: string, parentPath: string, folderName: string) => {
     const fd = new FormData();
     fd.append("name", name);

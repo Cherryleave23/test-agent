@@ -76,10 +76,9 @@ export default function App() {
     return r;
   }, [current]);
 
-  const loadTree = useCallback(async (name: string, path: string) => {
-    const t = await api.getTree(name, path);
+  const loadTree = useCallback(async (name: string) => {
+    const t = await api.getTreeFull(name);
     setTree(t);
-    setCurrentFolder(path);
   }, []);
 
   const loadProcessed = useCallback(async (name: string) => {
@@ -109,7 +108,7 @@ export default function App() {
       const name = r.current || (r.repos[0] && r.repos[0].name);
       if (name) {
         setCurrent(name);
-        loadTree(name, "");
+        loadTree(name);
         loadProcessed(name);
         const repo = r.repos.find((rp: any) => rp.name === name);
         setCurrentOutputDir(repo?.output_dir || "");
@@ -148,7 +147,7 @@ export default function App() {
     setCurrent(name);
     setSelFiles(new Set());
     setSelFolders(new Set());
-    await loadTree(name, "");
+    await loadTree(name);
     await loadProcessed(name);
     await loadRepos();
     updateOutputDir(name);
@@ -165,13 +164,13 @@ export default function App() {
     }
   };
 
-  const navigate = (path: string) => loadTree(current, path);
-
   const toggleFile = (path: string) =>
     setSelFiles((s) => { const n = new Set(s); n.has(path) ? n.delete(path) : n.add(path); return n; });
 
   const toggleFolder = (path: string) =>
     setSelFolders((s) => { const n = new Set(s); n.has(path) ? n.delete(path) : n.add(path); return n; });
+
+  const setActiveFolder = (path: string) => setCurrentFolder(path);
 
   const selectAllInCurrent = () => {
     if (!tree) return;
@@ -183,7 +182,7 @@ export default function App() {
     try {
       await api.mkdir(current, parentPath, folderName);
       setMsg(`文件夹「${folderName}」已创建`);
-      await loadTree(current, currentFolder);
+      await loadTree(current);
     } catch (e: any) { setMsg("创建文件夹失败：" + e.message); }
   };
 
@@ -192,7 +191,7 @@ export default function App() {
     try {
       await api.rmdir(current, folderPath);
       setMsg(`文件夹已删除`);
-      await loadTree(current, currentFolder);
+      await loadTree(current);
     } catch (e: any) { setMsg("删除文件夹失败：" + e.message); }
   };
 
@@ -201,7 +200,7 @@ export default function App() {
     try {
       await api.deleteFile(current, filePath);
       setMsg(`文件已删除`);
-      await loadTree(current, currentFolder);
+      await loadTree(current);
       if (previewName === filePath) { setPreviewName(null); setPreviewContent(""); }
     } catch (e: any) { setMsg("删除文件失败：" + e.message); }
   };
@@ -234,7 +233,7 @@ export default function App() {
     try {
       await api.moveItem(current, srcPath, dstFolder);
       setMsg(`已移动 ${srcPath} → ${dstFolder}`);
-      await loadTree(current, currentFolder);
+      await loadTree(current);
       if (previewName === srcPath) setPreviewName(null);
     } catch (e: any) { setMsg("移动失败：" + e.message); }
   };
@@ -253,7 +252,7 @@ export default function App() {
         uploaded++;
       }
       setMsg(`已上传 ${uploaded} 个文件到 ${currentFolder || "根目录"}`);
-      await loadTree(current, currentFolder);
+      await loadTree(current);
     } catch (e: any) { setMsg("上传失败：" + e.message); }
     finally { setBusy(false); }
   };
@@ -270,7 +269,7 @@ export default function App() {
         await api.upload(current, currentFolder, file);
       }
       setMsg(`已从系统拖入 ${paths.length} 个文件`);
-      await loadTree(current, currentFolder);
+      await loadTree(current);
     } catch (e: any) { setMsg("系统拖入处理失败：" + e.message); }
     finally { setBusy(false); }
   };
@@ -330,10 +329,10 @@ export default function App() {
           selFiles={selFiles}
           selFolders={selFolders}
           processedPaths={processedPaths}
-          onNavigate={navigate}
           onToggleFile={toggleFile}
           onToggleFolder={toggleFolder}
           onSelectAll={selectAllInCurrent}
+          onSetCurrentFolder={setActiveFolder}
           onMkdir={onMkdir}
           onRmdir={onRmdir}
           onDeleteFile={onDeleteFile}
