@@ -12,6 +12,7 @@
 | MOD-wechat | 个人微信(iLink Bot API)接入：消息收发/身份识别/去重 | `modules/MOD-wechat.md` | wechat | partial（iLink 网关+约束接线已落地） |
 | MOD-baby-profile | 宝宝/客户档案层：快速切换消歧+主动建档/归档+焦点注入 | `modules/MOD-baby-profile.md` | baby | partial（P2：存储+每轮消歧+混合式建档安全网+主动归档+焦点注入） |
 | MOD-deploy | 端侧 1家1实例部署：Docker/配置驱动/隔离 | `modules/MOD-deploy.md` | deploy | partial（P1：Windows 直装+依赖分层+URL拉取+可插拔配置+环境变量覆盖已落地） |
+| MOD-admin | WebUI 管理后台：LLM选择/数据库加载/门店员工/微信绑定/宝宝档案 | `modules/MOD-admin.md` | admin | partial（5 大板块 API + HTML 页面已落地，10/10 harness GREEN） |
 
 > ⚠️ **新增有界上下文 `tools/dataproc/`**（standalone 数据处理工具，独立于 `src/`）：负责 crawl / OCR / 结构化抽取 / 实体解析 / 分类，产出 NDJSON bundle 产物契约；agent 端 `src/ingest/importer.py` 仅加载该 bundle。二者**彻底隔离**（工具不 `import src.*`、agent 不 `import` 工具），仅以产物契约为边界——详见 `modules/MOD-knowledge-ingest.md`「〇·产物契约」「〇·P4」。
 

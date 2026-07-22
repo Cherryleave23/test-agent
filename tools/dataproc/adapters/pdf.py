@@ -31,7 +31,7 @@ def _render_pages(path: str):
 
 
 def _ocr_images(images, run_real_ocr: bool):
-    """对一组图像跑 PaddleOCR + 可选 PP-Structure；返回 (text, tables, low_conf)。"""
+    """对一组图像跑 PaddleOCR + PP-Structure 表格识别；返回 (text, tables, low_conf)。"""
     if not run_real_ocr:
         raise OCRDeferred("run_real_ocr=False，PDF 扫描件 OCR 推迟")
     if not paddle_available():
@@ -40,6 +40,8 @@ def _ocr_images(images, run_real_ocr: bool):
     from paddleocr import PaddleOCR
     import numpy as np
     ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+    # PP-Structure 表格识别引擎（与 PaddleOCR 同包，但独立模型）
+    pp_engine = _try_init_ppstructure()
     texts: list = []
     tables: list = []
     low_conf = False
@@ -58,15 +60,91 @@ def _ocr_images(images, run_real_ocr: bool):
         if not page_lines:
             low_conf = True
         texts.append("\n".join(page_lines))
+        # PP-Structure 表格抽取
+        if pp_engine is not None:
+            page_tables = _extract_tables_ppstructure(pp_engine, arr)
+            tables.extend(page_tables)
     text = "\n".join(texts).strip()
-    # PP-Structure 表格（可选装；缺则标 table_pending）
-    try:
-        from ppstructure.predict_system import PredictConfig  # 仅在已装时
-        # 真实表格抽取路径（端侧可选装）；此处不强制，避免把重依赖变硬依赖。
-        _ = PredictConfig
-    except Exception:
-        pass
     return text, tables, low_conf
+
+
+def _try_init_ppstructure():
+    """尝试初始化 PP-Structure 引擎；缺依赖返回 None（调用方保持 table_pending）。"""
+    try:
+        from paddleocr import PPStructure
+        return PPStructure(show_log=False, layout=True, table=True,
+                           ocr=True, structure_version="PP-StructureV2")
+    except Exception:
+        return None
+
+
+def _extract_tables_ppstructure(pp_engine, img_array) -> list:
+    """用 PP-Structure 从图像中抽取表格，返回 table dict 列表。
+
+    每个 table dict 包含：
+    - html: 表格 HTML 结构字符串
+    - cells: [[row_val, ...], ...] 二维数组（从 HTML 解析）
+    - bbox: [x1, y1, x2, y2] 表格区域坐标
+    """
+    import re
+    from html.parser import HTMLParser
+
+    class _TableHTMLParser(HTMLParser):
+        """从 PP-Structure 输出的 HTML 中解析单元格为二维数组。"""
+
+        def __init__(self):
+            super().__init__()
+            self.rows: list = []
+            self._cur_row: list = []
+            self._cur_cell: str = ""
+            self._in_cell = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "tr":
+                self._cur_row = []
+            elif tag in ("td", "th"):
+                self._in_cell = True
+                self._cur_cell = ""
+
+        def handle_endtag(self, tag):
+            if tag == "tr":
+                if self._cur_row:
+                    self.rows.append(self._cur_row)
+            elif tag in ("td", "th"):
+                self._cur_row.append(self._cur_cell.strip())
+                self._in_cell = False
+
+        def handle_data(self, data):
+            if self._in_cell:
+                self._cur_cell += data
+
+    out: list = []
+    try:
+        results = pp_engine(img_array)
+        if not results:
+            return out
+        for region in results:
+            if not isinstance(region, dict):
+                continue
+            if region.get("type") != "table":
+                continue
+            res = region.get("res", {})
+            html = res.get("html", "") if isinstance(res, dict) else ""
+            bbox = region.get("bbox", [0, 0, 0, 0])
+            if not html:
+                continue
+            # 从 HTML 解析单元格
+            parser = _TableHTMLParser()
+            parser.feed(html)
+            cells = parser.rows if parser.rows else []
+            out.append({
+                "html": html,
+                "cells": cells,
+                "bbox": bbox,
+            })
+    except Exception:
+        pass  # PP-Structure 表格抽取失败不阻断 OCR 文本
+    return out
 
 
 class PDFAdapter:

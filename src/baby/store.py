@@ -355,3 +355,27 @@ class BabyProfileStore:
                 "status": r["status"] or "pending",
             })
         return out
+
+    def list_all_for_enterprise(self, ent: str) -> List[dict]:
+        """返回该企业全部宝宝清单（管理后台用，跨员工）。"""
+        out: List[dict] = []
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                """SELECT b.baby_id, b.name AS baby_name, b.baby_age, b.gender,
+                          b.stage, b.status, b.enterprise_id, b.employee_id
+                   FROM babies b
+                   WHERE b.enterprise_id=?
+                   ORDER BY b.baby_id""",
+                (ent,),
+            ).fetchall()
+        for r in rows:
+            out.append({
+                "baby_id": r["baby_id"], "baby_name": r["baby_name"],
+                "baby_age": _dec(r["baby_age"]),
+                "gender": _dec(r["gender"]),
+                "stage": _dec(r["stage"]),
+                "status": r["status"] or "pending",
+                "enterprise_id": r["enterprise_id"],
+                "employee_id": r["employee_id"],
+            })
+        return out

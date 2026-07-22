@@ -30,8 +30,9 @@
 | MOD-baby-profile | 宝宝/客户档案层：快速切换消歧 + 混合式建档安全网 + 主动归档 + 焦点宝宝档案注入 |
 | MOD-wechat | **个人微信（自建 iLink Bot API 网关，方案 B）** 接入：消息收发 / 按 from_user_id 身份识别 / 去重 |
 | MOD-deploy | 端侧 1 家 1 实例部署：Docker / Windows 直装 / 配置驱动 / 依赖分层 / 隔离 |
+| MOD-admin | WebUI 管理后台：LLM 选择 / 数据库加载 / 门店员工管理 / 微信网关绑定 / 宝宝档案查看 |
 
-> 当前状态：PRD 治理骨架 + 7 模块**可实现规格**（含 harness 验收草案）已就位；**已进入实现阶段**，
+> 当前状态：PRD 治理骨架 + 8 模块**可实现规格**（含 harness 验收草案）已就位；**已进入实现阶段**，
 > 首批 P 级任务（知识转化层、会话约束层）已交付并通过全量门禁（见下「实现进展」）。仍按 CVC 纪律：意图先行、每行为配 harness、改必全量回归。
 
 ## 实现进展
@@ -58,7 +59,7 @@
 | `fix(baby)` | **P0 修复：跨上下文污染防护（C1+C2）** | C1 `focus_is_stable` 无宝宝信号时返回 False（原 return True 导致成人检验报告/用户自身症状被归档到焦点宝宝）+ `resolve_and_extract` 无信号时不抽取属性（返回空 extracted）+ C2 `_validate_extracted` 合理性校验兜底（baby_age>6岁拒绝、birth_date 未来/太久以前拒绝）+ `_BABY_SIGNALS` 补充 `\d\s*段` | 污染防护 5/5 + 全量 16/16 全绿 |
 | `fix(baby)` | **P0 修复：取消规则短路，每轮走 LLM（D1）** | 移除 `focus_is_stable` 规则短路归档路径（原逻辑焦点稳定时跳过 LLM 用规则抽取，无法处理相对时间"1年前3岁"/开放词汇"肚子疼"/隐含推算）+ 每轮走 LLM（LLM 既判归属又抽属性）+ `_parse_resolution` 空 JSON 默认 action=chat + `resolve_and_extract` 移除无信号预过滤（让 LLM 通过上下文判断归属）+ 规则抽取降级为 LLM 解析失败兜底 | 时序 3/3 + 全量 17/17 全绿 |
 
-> **全量门禁：17/17 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
+> **全量门禁：32/32 ALL GREEN**（`run_harness.py --all`，~50s）。重型真实模型测试默认跳过，
 > 设 `RUN_REAL_MODEL=1` 并加 `--timeout 600` 可显式运行（bge 语义嵌入弯曲 7/7、真实重排 4/4 均绿）。
 
 ### 模块实现状态
@@ -71,6 +72,7 @@
 | MOD-baby-profile | **partial（P2 + P2-v2 已落地）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 / 焦点稳定结果缓存 / Prompt Caching 稳定前缀 + ORDER BY + 预热；**schema v2: `birth_date`/`gestational_weeks`/`medical_history`/`feeding_history` 结构化字段 + SQL 自动迁移**；**终极实战 harness: 5 宝宝 34 条碎片化信息随机归档 + 交叉提问验收（P30-P39）** |
 | MOD-wechat | partial | iLink Bot API 网关 + 约束/档案接线已落地 |
 | MOD-deploy | **partial（P1 + P0 安全已落地）** | **Windows 直装 + 三层依赖分层 + `configure.ps1` 配置向导 + 环境变量覆盖 + `PluginManager` 可插拔模型路径** + **P0 安全**：密钥环境变量化(`from_yaml_with_env`+env_file+secret_scan) / 出入站白名单(`egress.EgressPolicy`) / 健康数据加密(`crypto.Vault`) 均已落地并配 harness |
+| MOD-admin | **partial（5 大板块已落地）** | **WebUI 管理后台**：FastAPI + 原生 HTML/JS（零前端工具链） / LLM 配置查看修改（写 yaml） / 数据库加载（触发 scan_and_load + pending 商品管理） / 门店与员工 CRUD / 微信网关绑定（token 脱敏） / 宝宝档案只读查看（跨员工列表 + 详情）+ **数据转化补全**: PP-Structure 表格识别（`from paddleocr import PPStructure`）+ `classifier.py`（ptype/product_category 推断） |
 
 ## 端侧部署
 
@@ -134,9 +136,10 @@ docker-compose -f deploy/docker-compose.yml up -d
 ## 运行验收
 
 ```bash
-python3 scripts/run_harness.py --all        # 全量回归（CI 门禁，20/20 绿）
+python3 scripts/run_harness.py --all        # 全量回归（CI 门禁，32/32 绿）
 python3 scripts/run_harness.py --module kb  # 仅某模块
 python3 scripts/run_harness.py --module deploy  # 端侧部署验收
+python3 scripts/run_harness.py --module admin  # 管理后台验收
 ```
 
 任一失败即退出非 0。新增行为必加测试；修 bug 必加回归。

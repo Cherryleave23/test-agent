@@ -20,6 +20,7 @@ from .schema import ProductRecord, CorpusRecord, HQProductRecord
 from .config import load_config
 from .adapters import get_adapter, OCR_EXTS, IMAGE_EXTS, OCRDeferred, OCRDependencyMissing
 from .structurer import structure, resolve
+from .classifier import classify
 from .llms import from_config
 
 TOOL_VERSION = "dataproc 0.1.0"
@@ -180,6 +181,12 @@ def _process_nontext(repo_dir, rel, full_path, kind, cfg, provider, known, state
         meta["ocr_pending"] = True
     if content and kind == "product_text":
         st = structure(content, provider)
+        # P3 分类推断：ptype + product_category（规则 + conf.yaml 覆盖）
+        cls = classify(content)
+        if cls["ptype"]:
+            st.fields.setdefault("ptype", cls["ptype"])
+        if cls["product_category"]:
+            st.fields.setdefault("product_category", cls["product_category"])
         if st.fields:
             r = resolve(st.fields, known)
             product_uid = r["uid"]
