@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import logging
+import threading
 from typing import Optional
 
 try:
@@ -27,28 +28,29 @@ logger = logging.getLogger(__name__)
 
 
 # ptype 推断规则：按优先级从高到低匹配
-# (正则模式, ptype 值)  —— 第一个命中即返回
+# (预编译正则, ptype 值)  —— 第一个命中即返回
 _PTYPE_RULES: list = [
-    (r"羊奶|羊乳|goat", "羊奶粉"),
-    (r"有机|organic", "有机奶粉"),
-    (r"氨基酸|amino\s*acid", "氨基酸配方粉"),
-    (r"深度水解|部分水解|水解|hydrolyz", "水解蛋白奶粉"),
-    (r"早产|low\s*birth\s*weight", "早产儿配方粉"),
-    (r"牛奶|牛乳|cow|milk", "牛奶粉"),
+    (re.compile(r"羊奶|羊乳|goat", re.I), "羊奶粉"),
+    (re.compile(r"有机|organic", re.I), "有机奶粉"),
+    (re.compile(r"氨基酸|amino\s*acid", re.I), "氨基酸配方粉"),
+    (re.compile(r"深度水解|部分水解|水解|hydrolyz", re.I), "水解蛋白奶粉"),
+    (re.compile(r"早产|low\s*birth\s*weight", re.I), "早产儿配方粉"),
+    (re.compile(r"牛奶|牛乳|cow|milk", re.I), "牛奶粉"),
 ]
 
 # product_category 默认推断：基于关键词
 _CATEGORY_RULES: list = [
-    (r"奶粉|配方粉|formula|stage|\d\s*段", "配方粉"),
-    (r"DHA|益生菌|维生素|钙|铁|锌|nutrient|营养", "营养品"),
-    (r"米粉|米糊|辅食|cereal", "辅食"),
-    (r"纸尿裤|尿不湿|diaper", "日用品"),
+    (re.compile(r"奶粉|配方粉|formula|stage|\d\s*段", re.I), "配方粉"),
+    (re.compile(r"DHA|益生菌|维生素|钙|铁|锌|nutrient|营养", re.I), "营养品"),
+    (re.compile(r"米粉|米糊|辅食|cereal", re.I), "辅食"),
+    (re.compile(r"纸尿裤|尿不湿|diaper", re.I), "日用品"),
 ]
 
 # 模块级缓存：conf.yaml 只读一次（文件 mtime 变更时刷新）
 _overrides_cache: dict = {}
 _overrides_path: Optional[str] = None
 _overrides_mtime: float = 0.0
+_overrides_lock = threading.Lock()
 
 
 def classify_ptype(text: str) -> str:
@@ -59,8 +61,8 @@ def classify_ptype(text: str) -> str:
     """
     if not text:
         return ""
-    for pattern, ptype in _PTYPE_RULES:
-        if re.search(pattern, text, re.I):
+    for regex, ptype in _PTYPE_RULES:
+        if regex.search(text):
             return ptype
     return ""
 
@@ -72,8 +74,8 @@ def classify_category(text: str) -> str:
     """
     if not text:
         return ""
-    for pattern, cat in _CATEGORY_RULES:
-        if re.search(pattern, text, re.I):
+    for regex, cat in _CATEGORY_RULES:
+        if regex.search(text):
             return cat
     return ""
 
@@ -101,18 +103,24 @@ def load_category_overrides(conf_path: Optional[str] = None) -> dict:
         mtime = os.path.getmtime(conf_path)
     except OSError:
         return {}
-    if conf_path == _overrides_path and mtime == _overrides_mtime:
-        return _overrides_cache
+    # 缓存命中检查（线程安全：加锁读共享缓存）
+    with _overrides_lock:
+        if conf_path == _overrides_path and mtime == _overrides_mtime:
+            return _overrides_cache
+    # 缓存未命中：重新加载（IO 较慢，放在锁外执行）
     try:
         with open(conf_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-        _overrides_cache = data.get("product_categories", {}) or {}
-        _overrides_path = conf_path
-        _overrides_mtime = mtime
-        return _overrides_cache
+        new_cache = data.get("product_categories", {}) or {}
     except Exception as e:
         logger.warning("conf.yaml 加载失败: %s: %s", type(e).__name__, e)
         return {}
+    # 写回缓存（线程安全：加锁写共享缓存）
+    with _overrides_lock:
+        _overrides_cache = new_cache
+        _overrides_path = conf_path
+        _overrides_mtime = mtime
+    return new_cache
 
 
 def classify(text: str, conf_path: Optional[str] = None) -> dict:
@@ -127,9 +135,9 @@ def classify(text: str, conf_path: Optional[str] = None) -> dict:
     if ptype and ptype in overrides:
         category = overrides[ptype]
     if not category:
-        # 尝试关键词覆盖
+        # 尝试关键词覆盖（最小长度约束，避免单字误匹配）
         for kw, cat in overrides.items():
-            if kw in text:
+            if len(kw) >= 2 and kw in text:
                 category = cat
                 break
     if not category:

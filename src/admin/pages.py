@@ -40,6 +40,10 @@ th { background: #f9fafb; font-weight: 600; }
 .badge-pending { background: #fef3c7; color: #92400e; }
 """
 
+_BASE_JS = """
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+"""
+
 
 def _esc(value) -> str:
     """HTML 转义。"""
@@ -138,7 +142,13 @@ document.getElementById('llm-form').addEventListener('submit', async (e) => {{
   }};
   const r = await fetch('/api/llm', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(body)}});
   const data = await r.json();
-  document.getElementById('result').innerHTML = '<div class="card" style="background:#d1fae5;">' + data.message + '</div>';
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.style.background = '#d1fae5';
+  card.textContent = data.message;
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  result.appendChild(card);
 }});
 </script>
 </body></html>"""
@@ -166,6 +176,7 @@ def render_database_page(cfg: EnterpriseConfig) -> str:
   </div>
 </div>
 <script>
+{_BASE_JS}
 async function loadStatus() {{
   const r = await fetch('/api/database/status');
   const d = await r.json();
@@ -174,9 +185,9 @@ async function loadStatus() {{
   const inboxDir = document.createElement('span');
   inboxDir.textContent = d.bundle_inbox_dir || '未配置';
   document.getElementById('status').innerHTML = `
-    <div class="stat"><div class="stat-num">${{d.corpus_count}}</div><div class="stat-label">语料条数</div></div>
-    <div class="stat"><div class="stat-num">${{d.products_milk}}</div><div class="stat-label">奶粉商品</div></div>
-    <div class="stat"><div class="stat-num">${{d.products_nutrition}}</div><div class="stat-label">营养品</div></div>
+    <div class="stat"><div class="stat-num">${{esc(d.corpus_count)}}</div><div class="stat-label">语料条数</div></div>
+    <div class="stat"><div class="stat-num">${{esc(d.products_milk)}}</div><div class="stat-label">奶粉商品</div></div>
+    <div class="stat"><div class="stat-num">${{esc(d.products_nutrition)}}</div><div class="stat-label">营养品</div></div>
     <p style="margin-top:12px;">数据库路径: <code></code></p>
     <p>收件箱: <code></code> ${{d.inbox_exists ? '✓' : '✗'}}</p>
   `;
@@ -189,12 +200,13 @@ async function loadPending() {{
   if (!d.length) {{ document.getElementById('pending').innerHTML = '<p>无待确认商品</p>'; return; }}
   let html = '<table><tr><th>ID</th><th>名称</th><th>品牌</th><th>类型</th><th>操作</th></tr>';
   for (const p of d) {{
-    const safeName = (p.name || '').replace(/</g, '&lt;');
-    const safeBrand = (p.brand || '').replace(/</g, '&lt;');
-    html += `<tr><td>${{p.id}}</td><td>${{safeName}}</td><td>${{safeBrand}}</td><td>${{p.table}}</td>
+    const safeName = esc(p.name);
+    const safeBrand = esc(p.brand);
+    const safeTable = esc(p.table);
+    html += `<tr><td>${{p.id}}</td><td>${{safeName}}</td><td>${{safeBrand}}</td><td>${{safeTable}}</td>
       <td><input id="val-${{p.id}}" placeholder="注册号/批准文号" style="width:160px;">
-      <button onclick="confirmProduct(${{p.id}},'${{p.table}}')" class="btn">确认</button>
-      <button onclick="deleteProduct(${{p.id}},'${{p.table}}')" class="btn btn-danger">删除</button></td></tr>`;
+      <button onclick="confirmProduct(${{p.id}},'${{safeTable}}')" class="btn">确认</button>
+      <button onclick="deleteProduct(${{p.id}},'${{safeTable}}')" class="btn btn-danger">删除</button></td></tr>`;
   }}
   html += '</table>';
   document.getElementById('pending').innerHTML = html;
@@ -258,7 +270,7 @@ def render_stores_page(cfg: EnterpriseConfig) -> str:
   </div>
 </div>
 <script>
-function esc(s) {{ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+{_BASE_JS}
 async function loadStores() {{
   const r = await fetch('/api/stores'); const d = await r.json();
   let html = '<table><tr><th>企业 ID</th><th>名称</th><th>数据库</th></tr>';
@@ -314,7 +326,7 @@ def render_gateway_page(cfg: EnterpriseConfig) -> str:
   </div>
 </div>
 <script>
-function esc(s) {{ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+{_BASE_JS}
 async function loadBindings() {{
   const r = await fetch('/api/gateway'); const d = await r.json();
   let html = '<table><tr><th>ID</th><th>企业</th><th>员工</th><th>微信名</th><th>Token</th><th>操作</th></tr>';
@@ -351,7 +363,7 @@ def render_babies_page(cfg: EnterpriseConfig) -> str:
   </div>
 </div>
 <script>
-function esc(s) {{ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+{_BASE_JS}
 async function loadBabies() {{
   const r = await fetch('/api/babies'); const d = await r.json();
   let html = '<table><tr><th>ID</th><th>姓名</th><th>月龄</th><th>性别</th><th>阶段</th><th>状态</th><th>操作</th></tr>';

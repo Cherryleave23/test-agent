@@ -131,6 +131,7 @@ def t9_conf_yaml_override():
     """T9: classifier conf.yaml 覆盖路径生效。"""
     import yaml as _yaml
     from dataproc.classifier import classify, load_category_overrides
+    import dataproc.classifier as cls_mod
 
     # 创建临时 conf.yaml，自定义 ptype→category 映射
     conf_dir = tempfile.mkdtemp()
@@ -138,22 +139,27 @@ def t9_conf_yaml_override():
     with open(conf_path, "w", encoding="utf-8") as f:
         _yaml.dump({"product_categories": {"牛奶粉": "定制类别"}}, f, allow_unicode=True)
 
-    overrides = load_category_overrides(conf_path)
-    assert "牛奶粉" in overrides, f"conf.yaml 应包含牛奶粉映射，实际: {overrides}"
-    assert overrides["牛奶粉"] == "定制类别"
+    try:
+        overrides = load_category_overrides(conf_path)
+        assert "牛奶粉" in overrides, f"conf.yaml 应包含牛奶粉映射，实际: {overrides}"
+        assert overrides["牛奶粉"] == "定制类别"
 
-    result = classify("优质牛奶粉 2段", conf_path)
-    assert result["ptype"] == "牛奶粉"
-    assert result["product_category"] == "定制类别", f"conf.yaml 覆盖应生效，实际: {result['product_category']}"
-
-    os.unlink(conf_path)
-    os.rmdir(conf_dir)
+        result = classify("优质牛奶粉 2段", conf_path)
+        assert result["ptype"] == "牛奶粉"
+        assert result["product_category"] == "定制类别", f"conf.yaml 覆盖应生效，实际: {result['product_category']}"
+    finally:
+        # P2-19: 清理 classifier 缓存，避免影响后续测试
+        cls_mod._overrides_cache = {}
+        cls_mod._overrides_path = None
+        cls_mod._overrides_mtime = 0.0
+        os.unlink(conf_path)
+        os.rmdir(conf_dir)
 
 
 def t10_conf_cache():
     """T10: classifier conf.yaml 缓存生效（多次调用不重复读文件）。"""
     import yaml as _yaml
-    from dataproc.classifier import classify, _overrides_path, _overrides_mtime
+    from dataproc.classifier import classify
     import dataproc.classifier as cls_mod
 
     conf_dir = tempfile.mkdtemp()
@@ -161,17 +167,22 @@ def t10_conf_cache():
     with open(conf_path, "w", encoding="utf-8") as f:
         _yaml.dump({"product_categories": {"牛奶粉": "缓存测试"}}, f, allow_unicode=True)
 
-    # 第一次调用：加载并缓存
-    classify("牛奶粉", conf_path)
-    assert cls_mod._overrides_path == conf_path, "缓存路径应设置"
-    first_mtime = cls_mod._overrides_mtime
+    try:
+        # 第一次调用：加载并缓存
+        classify("牛奶粉", conf_path)
+        assert cls_mod._overrides_path == conf_path, "缓存路径应设置"
+        first_mtime = cls_mod._overrides_mtime
 
-    # 第二次调用：应命中缓存（不重新读文件）
-    classify("牛奶粉", conf_path)
-    assert cls_mod._overrides_mtime == first_mtime, "mtime 未变时应命中缓存"
-
-    os.unlink(conf_path)
-    os.rmdir(conf_dir)
+        # 第二次调用：应命中缓存（不重新读文件）
+        classify("牛奶粉", conf_path)
+        assert cls_mod._overrides_mtime == first_mtime, "mtime 未变时应命中缓存"
+    finally:
+        # P2-19: 清理 classifier 缓存，避免影响后续测试
+        cls_mod._overrides_cache = {}
+        cls_mod._overrides_path = None
+        cls_mod._overrides_mtime = 0.0
+        os.unlink(conf_path)
+        os.rmdir(conf_dir)
 
 
 CHECKS = [

@@ -16,6 +16,25 @@ SLICE_RATIO = 3.0
 SLICE_H = 1200          # 单切片像素高
 SLICE_OVERLAP = 120     # 切片重叠，避免切断行
 
+# 模块级单例：避免每次调用重新初始化 PaddleOCR 引擎
+_ocr_engine = None
+_ocr_initialized = False
+
+
+def _get_paddle_ocr():
+    """获取 PaddleOCR 引擎单例。首次调用初始化，后续复用。"""
+    global _ocr_engine, _ocr_initialized
+    if _ocr_initialized:
+        return _ocr_engine
+    _ocr_initialized = True
+    try:
+        from paddleocr import PaddleOCR
+        _ocr_engine = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+    except Exception as e:
+        logger.warning("PaddleOCR 实例初始化失败: %s: %s", type(e).__name__, e)
+        _ocr_engine = None
+    return _ocr_engine
+
 
 def _get_cv2():
     """延迟导入 cv2，避免模块加载时硬依赖。"""
@@ -43,10 +62,13 @@ def _slice_long(gray: np.ndarray):
         yield gray
         return
     step = SLICE_H - SLICE_OVERLAP
+    last_y = 0
     for y in range(0, max(h - SLICE_H, 0) + 1, step):
         yield gray[y:y + SLICE_H]
-    if h - SLICE_H > 0:
-        yield gray[h - SLICE_H:h]  # 末片收尾
+        last_y = y
+    # 末片收尾：仅当还存在未被覆盖的尾部（且不与上一片完全重复）时补一片
+    if h - SLICE_H > last_y:
+        yield gray[h - SLICE_H:h]
 
 
 def _reading_order(lines):
@@ -65,8 +87,9 @@ def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
     if not paddle_available():
         raise OCRDependencyMissing("PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
 
-    from paddleocr import PaddleOCR
-    ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+    ocr = _get_paddle_ocr()
+    if ocr is None:
+        raise OCRDependencyMissing("PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
     texts: list = []
     low_conf = False
     for chunk in _slice_long(gray):
@@ -92,14 +115,20 @@ class ImageTableAdapter:
 
     def extract(self, path: str, run_real_ocr: bool = False) -> AdapterResult:
         from PIL import Image
-        pil = Image.open(path).convert("RGB")
-        arr = np.array(pil)
-        gray = _preprocess(arr)
-        text, low_conf = _ocr_image(gray, run_real_ocr)
-        # PP-Structure 表格抽取（共享模块，对原图 RGB 跑版面分析+表格识别）
-        tables = []
-        if run_real_ocr and paddle_available() and get_ppstructure() is not None:
-            tables = _extract_tables_ppstructure(arr)
+        try:
+            with Image.open(path) as pil:
+                arr = np.array(pil.convert("RGB"))
+            gray = _preprocess(arr)
+            text, low_conf = _ocr_image(gray, run_real_ocr)
+            # PP-Structure 表格抽取（共享模块，对原图 RGB 跑版面分析+表格识别）
+            tables = []
+            if run_real_ocr and paddle_available() and get_ppstructure() is not None:
+                tables = _extract_tables_ppstructure(arr)
+        except (OCRDeferred, OCRDependencyMissing):
+            raise
+        except Exception as e:
+            logger.exception("图片适配器处理失败 %s: %s", type(e).__name__, e)
+            raise RuntimeError(f"图片处理失败: {type(e).__name__}: {e}") from e
         meta = {"source": "image", "ocr": True, "low_conf": low_conf,
                 "preprocess": "resize+gray+CLAHE"}
         if not tables:

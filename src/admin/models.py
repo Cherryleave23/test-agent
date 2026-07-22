@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, Field
 
 from common.db import connect
 
@@ -42,27 +42,35 @@ class LLMConfigUpdate(BaseModel):
     base_url: str = ""
     model: str = "default"
     api_key: str = ""
-    temperature: float = 0.2
-    max_tokens: int = 1024
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=1024, ge=1, le=32768)
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, v: str) -> str:
+        allowed = {"mock", "ollama", "cloud"}
+        if v not in allowed:
+            raise ValueError(f"kind 必须是 {allowed} 之一")
+        return v
 
 
 class StoreCreate(BaseModel):
-    enterprise_id: str
-    enterprise_name: str
+    enterprise_id: str = Field(min_length=1)
+    enterprise_name: str = Field(min_length=1)
     db_path: str = "instance.db"
 
 
 class EmployeeCreate(BaseModel):
-    enterprise_id: str
-    employee_id: str
-    employee_name: str
+    enterprise_id: str = Field(min_length=1)
+    employee_id: str = Field(min_length=1)
+    employee_name: str = Field(min_length=1)
 
 
 class GatewayBinding(BaseModel):
-    enterprise_id: str
-    employee_id: str
+    enterprise_id: str = Field(min_length=1)
+    employee_id: str = Field(min_length=1)
     wechat_name: str = ""
-    bot_token: str
+    bot_token: str = Field(min_length=1)
 
 
 def validate_table(table: str) -> str:
@@ -73,7 +81,12 @@ def validate_table(table: str) -> str:
 
 
 def mask_token(token: str) -> str:
-    """脱敏 bot_token：保留前 8 字符 + 省略号。"""
+    """脱敏 bot_token：保留前 4 + 后 4 字符，中间用 * 填充。
+
+    P2-03: 原 mask 仅保留前 8 字符，对短 token 泄露过多。
+    """
     if not token:
         return ""
-    return token[:8] + "…"
+    if len(token) <= 12:
+        return token[:2] + "*" * (len(token) - 2)
+    return token[:4] + "*" * (len(token) - 8) + token[-4:]

@@ -1,10 +1,32 @@
 """PDF 适配器：数字直抽 + 扫描件 PaddleOCR（+ 可选 PP-Structure 表格）。零 src.*。"""
 from __future__ import annotations
 
+import logging
 import os
 
 from . import MIN_DIGITAL_TEXT, OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
 from ._ppstructure import extract_tables as _extract_tables_ppstructure, get_ppstructure
+
+logger = logging.getLogger(__name__)
+
+# 模块级单例：避免每次调用重新初始化 PaddleOCR 引擎
+_ocr_engine = None
+_ocr_initialized = False
+
+
+def _get_paddle_ocr():
+    """获取 PaddleOCR 引擎单例。首次调用初始化，后续复用。"""
+    global _ocr_engine, _ocr_initialized
+    if _ocr_initialized:
+        return _ocr_engine
+    _ocr_initialized = True
+    try:
+        from paddleocr import PaddleOCR
+        _ocr_engine = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+    except Exception as e:
+        logger.warning("PaddleOCR 实例初始化失败: %s: %s", type(e).__name__, e)
+        _ocr_engine = None
+    return _ocr_engine
 
 
 def _digital_text(path: str) -> str:
@@ -17,7 +39,8 @@ def _digital_text(path: str) -> str:
         reader = PdfReader(path)
         parts = [p.extract_text() or "" for p in reader.pages]
         return "\n".join(parts).strip()
-    except Exception:
+    except Exception as e:
+        logger.warning("pypdf 文本抽取失败 %s: %s", type(e).__name__, e)
         return ""
 
 
@@ -26,9 +49,12 @@ def _render_pages(path: str):
     import fitz  # PyMuPDF
     from PIL import Image
     doc = fitz.open(path)
-    for page in doc:
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-        yield Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    try:
+        for page in doc:
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            yield Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    finally:
+        doc.close()
 
 
 def _ocr_images(images, run_real_ocr: bool):
@@ -38,9 +64,10 @@ def _ocr_images(images, run_real_ocr: bool):
     if not paddle_available():
         raise OCRDependencyMissing("PaddleOCR 未安装，无法对扫描件 PDF 做 OCR（RUN_REAL_OCR=1 但缺依赖）")
 
-    from paddleocr import PaddleOCR
     import numpy as np
-    ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+    ocr = _get_paddle_ocr()
+    if ocr is None:
+        raise OCRDependencyMissing("PaddleOCR 未安装，无法对扫描件 PDF 做 OCR（RUN_REAL_OCR=1 但缺依赖）")
     # PP-Structure 引擎（单例，缺依赖返回 None，保持 table_pending）
     pp_engine = get_ppstructure()
     texts: list = []
@@ -54,7 +81,11 @@ def _ocr_images(images, run_real_ocr: bool):
             for line in res[0] or []:
                 if not line:
                     continue
-                box, (txt, score) = line
+                try:
+                    box, (txt, score) = line
+                except (ValueError, TypeError):
+                    logger.warning("跳过无法解析的 OCR 行: %r", line)
+                    continue
                 if score < 0.5:
                     low_conf = True
                 page_lines.append(txt)
@@ -74,6 +105,8 @@ class PDFAdapter:
     kind = "pdf"
 
     def extract(self, path: str, run_real_ocr: bool = False) -> AdapterResult:
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"PDF 文件不存在: {path}")
         digital = _digital_text(path)
         if len(digital) >= MIN_DIGITAL_TEXT:
             return AdapterResult(
@@ -95,5 +128,6 @@ def _page_count(path: str) -> int:
     try:
         from pypdf import PdfReader
         return len(PdfReader(path).pages)
-    except Exception:
+    except Exception as e:
+        logger.warning("pypdf 页数读取失败 %s: %s", type(e).__name__, e)
         return 0

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -25,6 +26,8 @@ from .llms import from_config
 
 TOOL_VERSION = "dataproc 0.1.0"
 SCHEMA_VERSION = "1.0"
+
+logger = logging.getLogger(__name__)
 
 
 # ---------- 小工具 ----------
@@ -93,7 +96,8 @@ def expand_selection(repo_dir: str, selection: Optional[dict]) -> List[str]:
 
 # ---------- 内容解析（不 import src.*） ----------
 def _parse_md_product(path: str):
-    text = open(path, encoding="utf-8", errors="ignore").read()
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        text = f.read()
     fields: dict = {}
     body = text
     m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.S)
@@ -166,7 +170,8 @@ def _process_nontext(repo_dir, rel, full_path, kind, cfg, provider, known, state
     else:
         # md/txt：直接读正文（不标 ocr_pending）；其余未知扩展名：占位
         if ext in (".md", ".txt"):
-            content = open(full_path, encoding="utf-8", errors="ignore").read()
+            with open(full_path, encoding="utf-8", errors="ignore") as f:
+                content = f.read()
             return content, {"source": ext.lstrip("."), "path": rel}, None, None
         return _placeholder()
 
@@ -190,8 +195,9 @@ def _process_nontext(repo_dir, rel, full_path, kind, cfg, provider, known, state
         if st.fields:
             r = resolve(st.fields, known)
             product_uid = r["uid"]
+            prod_kind = "nutrition" if cls.get("product_category") == "营养品" else "milk"
             product_dict = ProductRecord(
-                kind="milk", uid=r["uid"], status=r["status"], source_ref=rel,
+                kind=prod_kind, uid=r["uid"], status=r["status"], source_ref=rel,
                 resolved=r["resolved"], fields=st.fields,
             ).to_dict()
             if st.provider_used not in ("rule-only", "rule-only(fallback)"):
@@ -217,8 +223,15 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
     corpus: List[dict] = []
     hq_products: List[dict] = []
 
-    selected = set(expand_selection(repo_dir, selection)) if selection is not None else None
-    full = selection is None
+    # 展开选择：只调用一次 expand_selection，复用结果作为 selected 与 processed_files
+    if selection is not None:
+        processed_files = expand_selection(repo_dir, selection)
+        selected = set(processed_files)
+        full = False
+    else:
+        processed_files = [r for top in TOP_FOLDERS for r in _walk_top(repo_dir, top)]
+        selected = None
+        full = True
 
     for top in TOP_FOLDERS:
         kind = KIND_BY_TOP[top]
@@ -228,36 +241,42 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
             full_path = os.path.join(repo_dir, rel)
             ext = os.path.splitext(rel)[1].lower()
 
-            if kind == "product_text" and ext == ".md":
-                fields, body = _parse_md_product(full_path)
-                reg = fields.get("reg_number")
-                uid = ("reg:" + reg) if reg else _detect_product_uid(repo_dir, rel)
-                status = "confirmed" if reg else "pending"
-                products.append(ProductRecord(
-                    kind="milk", uid=uid, status=status, source_ref=rel,
-                    resolved={"match": "reg_number" if reg else "tuple",
-                               "key": ["brand", "name", "stage"]},
-                    fields=fields,
-                ).to_dict())
-                if namespace == "hq":
-                    hq_products.append(HQProductRecord(
-                        kind="milk", fields=fields, meta={"vendor": ent_id}).to_dict())
-                corpus.append(CorpusRecord(
-                    part=part, kind="product_text", title=os.path.basename(rel),
-                    content=body, product_uid=uid,
-                    meta={"source": "md", "path": rel}, lang="zh").to_dict())
-            else:
-                content, meta, product_dict, product_uid = _process_nontext(
-                    repo_dir, rel, full_path, kind, cfg, provider, known, state)
-                if product_dict:
-                    products.append(product_dict)
+            try:
+                if kind == "product_text" and ext == ".md":
+                    fields, body = _parse_md_product(full_path)
+                    reg = fields.get("reg_number")
+                    uid = ("reg:" + reg) if reg else _detect_product_uid(repo_dir, rel)
+                    status = "confirmed" if reg else "pending"
+                    cls = classify(body)
+                    prod_kind = "nutrition" if cls.get("product_category") == "营养品" else "milk"
+                    products.append(ProductRecord(
+                        kind=prod_kind, uid=uid, status=status, source_ref=rel,
+                        resolved={"match": "reg_number" if reg else "tuple",
+                                   "key": ["brand", "name", "stage"]},
+                        fields=fields,
+                    ).to_dict())
                     if namespace == "hq":
                         hq_products.append(HQProductRecord(
-                            kind="milk", fields=product_dict["fields"],
-                            meta={"vendor": ent_id}).to_dict())
-                corpus.append(CorpusRecord(
-                    part=part, kind=kind, title=os.path.basename(rel), content=content,
-                    product_uid=product_uid, meta=meta, lang="zh").to_dict())
+                            kind="milk", fields=fields, meta={"vendor": ent_id}).to_dict())
+                    corpus.append(CorpusRecord(
+                        part=part, kind="product_text", title=os.path.basename(rel),
+                        content=body, product_uid=uid,
+                        meta={"source": "md", "path": rel}, lang="zh").to_dict())
+                else:
+                    content, meta, product_dict, product_uid = _process_nontext(
+                        repo_dir, rel, full_path, kind, cfg, provider, known, state)
+                    if product_dict:
+                        products.append(product_dict)
+                        if namespace == "hq":
+                            hq_products.append(HQProductRecord(
+                                kind="milk", fields=product_dict["fields"],
+                                meta={"vendor": ent_id}).to_dict())
+                    corpus.append(CorpusRecord(
+                        part=part, kind=kind, title=os.path.basename(rel), content=content,
+                        product_uid=product_uid, meta=meta, lang="zh").to_dict())
+            except Exception as e:
+                logger.error("处理文件失败 %s: %s: %s", rel, type(e).__name__, e)
+                continue
 
     os.makedirs(out_dir, exist_ok=True)
 
@@ -289,6 +308,4 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-    processed_files = expand_selection(repo_dir, selection) if selection is not None else \
-        [r for top in TOP_FOLDERS for r in _walk_top(repo_dir, top)]
     return {"out_dir": out_dir, "manifest": manifest, "processed_files": processed_files}

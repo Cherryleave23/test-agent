@@ -1,4 +1,4 @@
-"""知识库存储（三库模型，O1/D2 → Chroma）。
+﻿"""知识库存储（三库模型，O1/D2 → Chroma）。
 
 - 向量检索：**Chroma 嵌入式 PersistentClient**（每实例一个持久化目录 = 物理企业隔离；
   原生 metadata 过滤按 enterprise_id 强化隔离；HQ 共享库以 enterprise_id='hq'）。
@@ -19,7 +19,7 @@ from typing import List, Optional
 
 import chromadb
 
-from common.db import connect
+from common.db import connect, db_tx
 from common.embeddings import embed, DIM, _domain_tokens
 from common.rerank import get_reranker
 from kb.models import MilkProduct, NutritionProduct
@@ -73,7 +73,7 @@ class KnowledgeStore:
 
     # ---------- schema ----------
     def _init_schema(self) -> None:
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             cur.execute(
                 """
@@ -149,7 +149,7 @@ class KnowledgeStore:
         # F2：HQ 为厂商分发共享库，实例侧只读 —— 只读性由分区（ent='hq'）保证，
         # delete_corpus/update_corpus 经 _row_readonly 拒绝改写（不污染内容型 meta）。
         hq_meta = dict(meta or {})
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             cid = self._add_corpus(
                 cur, "hq_kb", HQ_ENT, None, title, content, hq_meta,
@@ -159,7 +159,7 @@ class KnowledgeStore:
 
     # ---------- 写：HQ 商品库（厂商侧复用，onboarding 播种）----------
     def add_hq_product(self, fields: dict, meta: Optional[dict] = None) -> int:
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO hq_products(kind, brand, name, reg_number, meta_json) "
@@ -173,7 +173,7 @@ class KnowledgeStore:
             return pid
 
     def get_hq_products(self) -> List[dict]:
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT id, kind, brand, name, reg_number, meta_json "
                 "FROM hq_products"
@@ -190,8 +190,9 @@ class KnowledgeStore:
         供微信侧「待确认列表」展示；确认后写对应批准号即不再 pending。
         """
         out: List[dict] = []
-        for tbl, col in self._PENDING_COL.items():
-            with connect(self.db_path) as conn:
+        # P2-22: 单连接遍历两张表，避免重复开关连接
+        with db_tx(self.db_path) as conn:
+            for tbl, col in self._PENDING_COL.items():
                 for r in conn.execute(
                     f"SELECT id, name, brand, {col} FROM {tbl} "
                     f"WHERE enterprise_id=? AND ({col} IS NULL OR {col}='')",
@@ -204,24 +205,54 @@ class KnowledgeStore:
         return out
 
     def confirm_product(self, product_id: int, value: str,
-                        table: str = "products_milk") -> None:
-        """确认 pending 商品：写入对应批准号（奶粉 reg_number / 营养品 health_license）。"""
+                        table: str = "products_milk",
+                        enterprise_id: Optional[str] = None) -> None:
+        """确认 pending 商品：写入对应批准号（奶粉 reg_number / 营养品 health_license）。
+
+        P0-04: 当传入 enterprise_id 时，校验商品归属，防跨租户越权。
+        """
         if table not in self._PENDING_COL:
             raise ValueError(f"未知商品表: {table}")
         col = self._PENDING_COL[table]
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
+            if enterprise_id is not None:
+                row = conn.execute(
+                    f"SELECT enterprise_id FROM {table} WHERE id=?", (product_id,)
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"商品不存在: id={product_id}")
+                if row["enterprise_id"] != enterprise_id:
+                    raise PermissionError(
+                        f"跨租户越权: 商品 id={product_id} 不属于 enterprise_id={enterprise_id}"
+                    )
             conn.execute(
                 f"UPDATE {table} SET {col}=? WHERE id=?",
                 (value, product_id),
             )
             conn.commit()
 
-    def delete_product(self, product_id: int, table: str = "products_milk") -> None:
-        """删除商品及其绑定的语料分块（b_milk/b_nutrition，按 product_id）。"""
+    def delete_product(self, product_id: int, table: str = "products_milk",
+                       enterprise_id: Optional[str] = None) -> None:
+        """删除商品及其绑定的语料分块（b_milk/b_nutrition，按 product_id）。
+
+        P0-04: 当传入 enterprise_id 时，校验商品归属，防跨租户越权。
+        P2-24: Chroma 批量删除，避免逐条调用。
+        """
         if table not in ("products_milk", "products_nutrition"):
             raise ValueError(f"未知商品表: {table}")
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
+            # P0-04: 跨租户校验
+            if enterprise_id is not None:
+                row = cur.execute(
+                    f"SELECT enterprise_id FROM {table} WHERE id=?", (product_id,)
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"商品不存在: id={product_id}")
+                if row["enterprise_id"] != enterprise_id:
+                    raise PermissionError(
+                        f"跨租户越权: 商品 id={product_id} 不属于 enterprise_id={enterprise_id}"
+                    )
             ids = [r["id"] for r in cur.execute(
                 "SELECT id FROM corpus WHERE product_id=?", (product_id,)).fetchall()]
             if ids:
@@ -230,9 +261,10 @@ class KnowledgeStore:
             cur.execute("DELETE FROM corpus WHERE product_id=?", (product_id,))
             cur.execute(f"DELETE FROM {table} WHERE id=?", (product_id,))
             conn.commit()
-        for i in ids:
+        # P2-24: 批量删除 Chroma 向量
+        if ids:
             try:
-                self.collection.delete(ids=[str(i)])
+                self.collection.delete(ids=[str(i) for i in ids])
             except Exception:
                 pass
 
@@ -241,7 +273,7 @@ class KnowledgeStore:
                      meta: Optional[dict] = None, product_id: Optional[int] = None) -> int:
         # product_id: 绑定具体商品的结构化主键（corpus 中 product_text/ingredient 用），
         # 供 importer 把 bundle 的 product_uid 解析为 product_id（F1）。
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             cid = self._add_corpus(
                 cur, "b_kb", enterprise_id, product_id, title, content,
@@ -252,7 +284,7 @@ class KnowledgeStore:
 
     # ---------- 采集去重（跨运行内容哈希）----------
     def is_ingested(self, enterprise_id: str, source_type: str, chash: str) -> bool:
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             row = conn.execute(
                 "SELECT 1 FROM ingest_dedup WHERE enterprise_id=? AND source_type=? AND chash=?",
                 (enterprise_id, source_type, chash),
@@ -260,7 +292,7 @@ class KnowledgeStore:
             return row is not None
 
     def mark_ingested(self, enterprise_id: str, source_type: str, chash: str) -> None:
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO ingest_dedup(enterprise_id, source_type, chash) VALUES(?,?,?)",
                 (enterprise_id, source_type, chash),
@@ -278,7 +310,7 @@ class KnowledgeStore:
 
     # ---------- 写：B-end 产品（语义分块入库）----------
     def add_milk(self, p: MilkProduct) -> int:
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             cur.execute(
                 """INSERT INTO products_milk(enterprise_id,name,brand,stage,age_range,price,
@@ -296,7 +328,7 @@ class KnowledgeStore:
             return pid
 
     def add_nutrition(self, p: NutritionProduct) -> int:
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             cur.execute(
                 """INSERT INTO products_nutrition(enterprise_id,name,brand,category,audience,
@@ -327,7 +359,7 @@ class KnowledgeStore:
 
     def delete_corpus(self, cid: int) -> None:
         """删除一条语料。HQ（厂商分发只读）行拒绝删除（F2）。"""
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             row = cur.execute(
                 "SELECT enterprise_id, meta_json FROM corpus WHERE id=?", (cid,)
@@ -353,7 +385,7 @@ class KnowledgeStore:
 
         厂商重分发仍走 add_hq_knowledge（vendor 路径），不受本护栏限制。
         """
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             row = cur.execute(
                 "SELECT enterprise_id, meta_json, part, product_id, chunk, title, content "
@@ -378,11 +410,16 @@ class KnowledgeStore:
             )
             cur.execute("DELETE FROM fts_corpus WHERE rowid=?", (cid,))
             conn.commit()
+            # P2-25: 在连接关闭前提取 Row 值，避免连接关闭后访问
+            row_ent = row["enterprise_id"]
+            row_part = row["part"]
+            row_pid = row["product_id"]
+            row_chunk = row["chunk"] or ""
         # 重新索引（chroma upsert + fts 插入）；在连接外调用 chroma 安全
         upd_kind = (json.loads(new_meta).get("kind", "") if new_meta else "")
         self._index(
-            None, cid, new_title, new_content, row["enterprise_id"], row["part"],
-            product_id=row["product_id"], chunk=row["chunk"] or "", kind=upd_kind,
+            None, cid, new_title, new_content, row_ent, row_part,
+            product_id=row_pid, chunk=row_chunk, kind=upd_kind,
         )
 
     def _add_corpus(self, cur, part, ent, product_id, title, text, meta,
@@ -414,7 +451,7 @@ class KnowledgeStore:
         # SQLite FTS5 关键词索引（字级 token 化，CJK 可命中）
         # cur=None 时（如 update_corpus 在连接外重索引）自建连接写入
         if cur is None:
-            with connect(self.db_path) as _c:
+            with db_tx(self.db_path) as _c:
                 _c.execute(
                     "INSERT INTO fts_corpus(rowid, title, content) VALUES(?,?,?)",
                     (cid, title, self.fts_text(title, content)),
@@ -454,7 +491,7 @@ class KnowledgeStore:
             for k, v in filters.items():
                 conds.append(f"{k}=?")
                 params.append(v)
-            with connect(self.db_path) as conn:
+            with db_tx(self.db_path) as conn:
                 for r in conn.execute(
                     f"SELECT id FROM {tbl} WHERE {' AND '.join(conds)}", params
                 ).fetchall():
@@ -504,7 +541,7 @@ class KnowledgeStore:
         #    filters 时 JOIN corpus 仅取限定 product_id 的分块。
         fts_ids: List[tuple] = []
         try:
-            with connect(self.db_path) as conn:
+            with db_tx(self.db_path) as conn:
                 if filters and allowed_ids is not None:
                     ph = ",".join("?" * len(allowed_ids)) if allowed_ids else "NULL"
                     sql = (
@@ -529,7 +566,7 @@ class KnowledgeStore:
         # 4) 回查 corpus，收集候选分块（召回阶段只负责「广度」）
         PRODUCT_BOOST = 1.25  # 产品块略加权（零售问答主诉求；HQ 为补充背景）
         chunks: list = []
-        with connect(self.db_path) as conn:
+        with db_tx(self.db_path) as conn:
             for cid, score in fused:
                 row = conn.execute(
                     "SELECT id, part, enterprise_id, title, content, meta_json, "
@@ -624,3 +661,4 @@ class KnowledgeStore:
         for rank, (cid, _) in enumerate(fts_ids):
             score[cid] = score.get(cid, 0.0) + 1.0 / (k + rank + 1)
         return sorted(score.items(), key=lambda x: -x[1])
+

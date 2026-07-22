@@ -28,6 +28,7 @@ import sys
 import tempfile
 import json
 import shutil
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -87,8 +88,8 @@ def a3_post_llm_config():
     yaml_dir = tempfile.mkdtemp()
     _temp_dirs.append(yaml_dir)
     yaml_path = os.path.join(yaml_dir, "enterprise.yaml")
-    os.environ["AGENT_CONFIG_PATH"] = yaml_path
-    try:
+    # P2-18: 使用 mock.patch.dict 隔离环境变量，不污染全局
+    with patch.dict(os.environ, {"AGENT_CONFIG_PATH": yaml_path}):
         client, _ = _make_client(db)
         r = client.post("/api/llm", json={
             "kind": "ollama", "model": "qwen2.5:7b",
@@ -102,8 +103,6 @@ def a3_post_llm_config():
             data = yaml.safe_load(f)
         assert data["llm"]["kind"] == "ollama"
         assert data["llm"]["model"] == "qwen2.5:7b"
-    finally:
-        os.environ.pop("AGENT_CONFIG_PATH", None)
 
 
 def a4_database_status():
@@ -167,7 +166,7 @@ def a8_gateway_binding():
     assert len(bindings) == 1
     assert bindings[0]["wechat_name"] == "门店小李"
     assert "secret-token-12345678" not in json.dumps(bindings), "bot_token 应被脱敏"
-    assert "…" in bindings[0]["bot_token"], "token 应有脱敏省略号"
+    assert "*" in bindings[0]["bot_token"], "token 应有脱敏星号"
 
 
 def a9_babies_list():
@@ -311,9 +310,11 @@ def a15_baby_detail_no_sensitive():
 def a16_scan_no_inbox():
     """A16: POST /api/database/scan 无收件箱时返回 400。"""
     client, _ = _make_client(_tmp_db())
-    os.environ.pop("BUNDLE_INBOX_DIR", None)
-    r = client.post("/api/database/scan")
-    assert r.status_code == 400, f"无收件箱应返回 400，实际: {r.status_code}"
+    # P2-18: 使用 mock.patch.dict 隔离环境变量
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("BUNDLE_INBOX_DIR", None)
+        r = client.post("/api/database/scan")
+        assert r.status_code == 400, f"无收件箱应返回 400，实际: {r.status_code}"
 
 
 def a17_baby_not_found():
@@ -328,6 +329,57 @@ def a18_confirm_bad_table():
     client, _ = _make_client(_tmp_db())
     r = client.post("/api/database/confirm?product_id=1&value=x&table=evil_table")
     assert r.status_code == 400, f"非法表名应返回 400，实际: {r.status_code}"
+
+
+def a19_bearer_token_auth():
+    """A19: Bearer Token 认证 — 无 token 401，正确 token 200，错误 token 401。"""
+    # P1-10: 设置 AGENT_ADMIN_TOKEN 后，所有 API 需携带 Bearer Token
+    with patch.dict(os.environ, {"AGENT_ADMIN_TOKEN": "test-secret-key-12345"}):
+        client, _ = _make_client(_tmp_db())
+        # 无 token → 401
+        r1 = client.get("/api/llm")
+        assert r1.status_code == 401, f"无 token 应返回 401，实际: {r1.status_code}"
+        # 正确 token → 200
+        r2 = client.get("/api/llm", headers={"Authorization": "Bearer test-secret-key-12345"})
+        assert r2.status_code == 200, f"正确 token 应返回 200，实际: {r2.status_code}"
+        # 错误 token → 401
+        r3 = client.get("/api/llm", headers={"Authorization": "Bearer wrong-key"})
+        assert r3.status_code == 401, f"错误 token 应返回 401，实际: {r3.status_code}"
+
+
+def a20_cross_tenant_isolation():
+    """A20: 跨租户隔离 — confirm/delete 强制校验 enterprise_id。"""
+    db = _tmp_db()
+    client, cfg = _make_client(db)
+    # 触发 schema 初始化
+    client.get("/api/database/status")
+    # 插入一条属于 ent_other 的商品
+    with connect(db) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO products_milk(enterprise_id,name,brand,stage,age_range,price,
+               origin,milk_origin,ptype,reg_number,manufacturer,ingredients,nutrition,highlights)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("ent_other", "他企商品", "品牌", "1段", "0-6个月",
+             199, "中国", "新西兰", "牛奶粉", "", "厂商",
+             "生牛乳", "蛋白质", "优质"),
+        )
+        pid = cur.lastrowid
+        conn.commit()
+    # 当前实例 enterprise_id=ent_test，尝试确认他企商品 → 应失败
+    from kb.store import KnowledgeStore
+    store = KnowledgeStore(db, embedding_kind="mock", rerank_kind="none")
+    try:
+        store.confirm_product(pid, "REG123", "products_milk", "ent_test")
+        assert False, "跨租户确认应抛 PermissionError"
+    except PermissionError:
+        pass  # 正确：拒绝跨租户操作
+    # 尝试删除他企商品 → 应失败
+    try:
+        store.delete_product(pid, "products_milk", "ent_test")
+        assert False, "跨租户删除应抛 PermissionError"
+    except PermissionError:
+        pass  # 正确：拒绝跨租户操作
 
 
 CHECKS = [
@@ -349,6 +401,8 @@ CHECKS = [
     ("A16 POST /api/database/scan 无收件箱返回 400", a16_scan_no_inbox),
     ("A17 GET /api/babies/{id} 不存在返回 404", a17_baby_not_found),
     ("A18 POST /api/database/confirm 非法表名返回 400", a18_confirm_bad_table),
+    ("A19 Bearer Token 认证（无/正确/错误）", a19_bearer_token_auth),
+    ("A20 跨租户隔离（confirm/delete 拒绝越权）", a20_cross_tenant_isolation),
 ]
 
 
