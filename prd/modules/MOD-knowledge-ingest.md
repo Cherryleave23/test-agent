@@ -74,7 +74,7 @@
 |------|------|------|
 | `tools/dataproc/adapters/pdf.py` | 新 | `PDFAdapter`：数字直抽 / 扫描件 OCR / 表格 PP-Structure，产出 `CorpusRecord` |
 | `tools/dataproc/adapters/image_table.py` | 新 | `ImageTableAdapter`：预处理 + PaddleOCR + 阅读顺序 + PP-Structure |
-| `tools/dataproc/schema.py` | 新 | `ProductRecord` / `CorpusRecord` / `HQProductRecord` 工具自管 schema（零反向依赖） |
+| `tools/dataproc/schema.py` | 新 | `ProductRecord` / `CorpusRecord`（`kind ∈ {product_text,article,ingredient}`）/ `HQProductRecord` 工具自管 schema（零反向依赖） |
 | `tools/dataproc/cli.py` | 新 | `dataproc build/crawl/ocr` CLI；独立 `dataproc/config.yaml`（含工具自身 LLM 配置） |
 | `deploy/dependency-manifest.yaml` | 改(增) | OCR Tier1 条目（paddlepaddle/paddleocr/PP-Structure 权重 URL+校验和） |
 | `harness/fixtures/` | 新 | 自带小样例（数字 PDF / 扫描件 PDF / 含表图片，均 < 数百 KB） |
@@ -119,7 +119,7 @@
   "enterprise_id": "ent_b",
   "tool_version": "dataproc 0.1.0",
   "generated_at": "2026-07-20T12:00:00+08:00",
-  "counts": {"products": 12, "corpus": 80, "hq_products": 3},
+  "counts": {"products": 12, "corpus": 80, "corpus_by_kind": {"product_text": 50, "article": 20, "ingredient": 10}, "hq_products": 3},
   "checksums": {"products.ndjson": "<sha256>", "corpus.ndjson": "<sha256>", "hq_products.ndjson": "<sha256>"},
   "structuring_provider": "ollama://qwen2.5:latest"
 }
@@ -146,6 +146,7 @@
 ```json
 {
   "part": "b_kb",
+  "kind": "product_text",
   "title": "睿护1段 电商详情页 OCR",
   "content": "（原始 OCR 文本/网页正文，保留溯源）",
   "product_uid": "reg:国食注字YP20180012",
@@ -153,8 +154,17 @@
   "lang": "zh"
 }
 ```
-> `part` ∈ {`b_kb`（企业自有 RAG 文本）, `hq_kb`（跨企业共享）}。`product_uid` 可选，关联 `products.ndjson` 的 `uid`（importer 解析为 `product_id`）。
-> 注：结构化产品的**语义分块**（基础信息/配料表/营养成分）由 agent 端 `store.add_milk` 的 `to_chunks()` 自动生成（源自 `fields`），**不在产物里重复**；`corpus.ndjson` 仅承载工具特有的原始文本（OCR 详情页/网页/PDF 正文），二者文本不同、不重复。
+> `part` ∈ {`b_kb`（企业自有 RAG 文本）, `hq_kb`（跨企业共享，厂商分发/实例只读）}；`kind` ∈ {`product_text`, `article`, `ingredient`} 三种语料类型（见下表）。`product_uid` 仅当语料**绑定具体商品**时存在（关联 `products.ndjson` 的 `uid`，importer 解析为 `product_id`）；主题级/通识语料无 `product_uid`。
+>
+> **三种 `corpus` 语料类型与落点**（对应 RAG DB 实际存在的四类内容）：
+> | `kind` | 含义 | 典型来源 | `part` | `product_uid` | 是否绑定商品 |
+> |--------|------|----------|--------|---------------|--------------|
+> | `product_text` | 商品详情页 / 包装 OCR / 网页正文 | `PDFAdapter` / `ImageTableAdapter` / `WebCrawlerAdapter` | `b_kb`（企业自有）；厂商统一版可 `hq_kb` | **有** | 是 |
+> | `article` | 母婴/育儿知识文章（主题级、跨商品） | `WebCrawlerAdapter`（知识页/FAQ） | `hq_kb`（厂商分发，实例只读） | **无** | 否（跨商品） |
+> | `ingredient` | 某成分深度文件（如 DHA 功效+有效原因） | `PDFAdapter` / `WebCrawlerAdapter` | `hq_kb`（通识科学，无 `product_uid`）**或** `b_kb`（某商品专属成分说明，有 `product_uid`） | 视落点 | 通识否 / 专属是 |
+>
+> **关键区分**：`ingredient` 深度文件 ≠ 结构化 `nutrition` 短字段——`nutrition` 是产品表里一行定量值（如"DHA 12mg/100g"），而 `ingredient` 是独立语料（如"DHA 为何促脑发育、有效剂量与机制"），按 `kind=ingredient` 入 `corpus`，**不进** `products.ndjson` 的 `fields`。
+> 注：结构化产品的**语义分块**（基础信息/配料表/营养成分）由 agent 端 `store.add_milk` 的 `to_chunks()` 自动生成（源自 `fields`），**不在产物里重复**；`corpus.ndjson` 仅承载工具特有的原始文本（OCR 详情页/网页/PDF 正文/知识文章/成分深度文件），与 `fields` 文本不同、不重复。
 
 **`hq_products.ndjson`**（每行一个 JSON 对象）：
 ```json
@@ -176,7 +186,7 @@
    - **先 HQ 商品库比对**（跨企业已知，data-model.md:13/127），命中则复用结构化字段、只补企业独有；未命中再落企业 B-end 独有。
    - 命中 → `status=confirmed` 原地更新；未命中 → `status=pending` 新建（防误建/污染）。复用 baby `resolve_and_archive` 安全网（pending 待确认、精确优先、防跨实体误并）。
 3. **分类（classification）**：`ptype` 由字段推断；`product_category` 取自企业 `conf.yaml` 产品结构，打标供 KB 过滤/溯源。
-4. **落产物**：结构化产品写 `products.ndjson`；原始 OCR 文本仍写 `corpus.ndjson`（带 `product_uid` 关联溯源）；HQ 复用写 `hq_products.ndjson`；三者经 `uid`/`product_uid` 关联。
+4. **落产物**：结构化产品写 `products.ndjson`；非结构化语料写 `corpus.ndjson`，按类型打 `kind`（`product_text`/`article`/`ingredient`）并按落点打 `part`（绑定商品的带 `product_uid` 溯源，跨商品 `article`/通识 `ingredient` 不带）；HQ 复用写 `hq_products.ndjson`；三者经 `uid`/`product_uid` 关联。
 5. 每行为配 harness（CVC 只增不删）。
 
 ### LLM 调用机制（structuring —— 工具自带，与 agent 解耦）
@@ -227,7 +237,7 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 1. **`load_bundle(bundle_dir, store, enterprise_id)`**：
    - 校验 `manifest.json`（`schema_version`、校验和、`enterprise_id == 运行实例` 否则拒绝）；
    - 读 `products.ndjson` → 由 `fields` 构建 `MilkProduct`/`NutritionProduct`（补 `enterprise_id`）→ `store.add_milk`/`add_nutrition`；记录 `uid→product_id` 映射；
-   - 读 `corpus.ndjson` → 解析 `product_uid→product_id` → `store.add_knowledge`（part=b_kb）或 `store.add_hq_knowledge`（part=hq_kb），`meta` 带 `product_id` 关联与溯源标签；
+   - 读 `corpus.ndjson` → 按 `part` 路由 sink：`b_kb`→`store.add_knowledge`、`hq_kb`→`store.add_hq_knowledge`；按 `kind`（`product_text`/`article`/`ingredient`）写入 `meta.kind` 标签供 KB 过滤/溯源；仅当语料绑定商品（`product_text` 或 `ingredient` 且 `part=b_kb`）时解析 `product_uid→product_id` 并写入 `meta.product_id`，主题级 `article` 与通识 `ingredient`（`hq_kb`、无 `product_uid`）不绑定商品；
    - 读 `hq_products.ndjson` → onboarding 播种（HQ 商品表 + HQ 共享库）。
 2. **幂等**：复用 `ingest_dedup` 内容哈希去重，重载同一 bundle 安全（不重复入库、不重复向量）。
 3. **企业隔离**：`manifest.enterprise_id` 必须 == 运行实例 `enterprise_id`，否则拒绝加载（隔离兜底）。
@@ -251,11 +261,11 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 | 编号 | 断言 | 对应实现 | 门控 |
 |------|------|----------|------|
 | IMP1 | bundle 的 `products.ndjson` 经 importer 载入 `products_milk`/`products_nutrition` | `importer.load_bundle` | 默认 |
-| IMP2 | bundle 的 `corpus.ndjson` 载入后 `retrieve` 可命中（向量+FTS） | `importer`+`store.retrieve` | 默认 |
+| IMP2 | bundle 的 `corpus.ndjson` 三类 `kind`（product_text/article/ingredient）载入后 `retrieve` 均可命中（向量+FTS），`meta.kind` 正确落库 | `importer`+`store.retrieve` | 默认 |
 | IMP3 | `hq_products.ndjson` 播种进 HQ 商品表 + HQ 共享库 | `importer` | 默认 |
 | IMP4 | `manifest.enterprise_id != 运行实例` → importer 拒绝加载（企业隔离） | `importer` | 默认 |
 | IMP5 | 同 bundle 重载二次 → 入库计数为 0（幂等去重） | `importer`+`ingest_dedup` | 默认 |
-| IMP6 | 边界集成：工具产 bundle → importer → store → 该商品 `retrieve` 命中其结构化块+原始 OCR 块 | `dataproc`+`importer` | 默认（fixture 源） |
+| IMP6 | 边界集成：工具产含三类 `kind` 的 bundle → importer → store → `retrieve` 命中结构化块+原始 `product_text`/`article`/`ingredient` 块，跨商品 `article` 不误绑商品 | `dataproc`+`importer` | 默认（fixture 源） |
 
 ---
 
@@ -275,7 +285,7 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 
 | 适配器（工具侧） | 工具 | 输入 | 产出（→ bundle） |
 |--------|------|------|------|
-| `WebCrawlerAdapter` | 标准库 `urllib`+`html.parser`（零依赖） | 官网 URL/域名（商品页/知识页/FAQ） | `CorpusRecord`（part=b_kb） |
+| `WebCrawlerAdapter` | 标准库 `urllib`+`html.parser`（零依赖） | 官网 URL/域名（商品页/知识页/FAQ） | `CorpusRecord`（商品页→`kind=product_text` part=b_kb；知识页/FAQ→`kind=article` part=hq_kb） |
 | `PDFAdapter` | 数字 PDF 走 `pypdf` 直抽；扫描件/表格走 PaddleOCR + PP-Structure | PDF 文件 | `CorpusRecord`（含扫描 OCR / 表格结构） |
 | `ImageTableAdapter` | PaddleOCR + 表格识别 + opencv 预处理 | 产品图 / 规格表图片 / 电商长图 | `CorpusRecord`（文本 + 表格结构） |
 | `MarkdownProductAdapter` | 正则解析 frontmatter+表格 | 商品 markdown | `ProductRecord`（结构化字段） |
