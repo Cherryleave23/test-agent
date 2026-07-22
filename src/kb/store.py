@@ -300,9 +300,10 @@ class KnowledgeStore:
             cur.execute("DELETE FROM fts_corpus WHERE rowid=?", (cid,))
             conn.commit()
         # 重新索引（chroma upsert + fts 插入）；在连接外调用 chroma 安全
+        upd_kind = (json.loads(new_meta).get("kind", "") if new_meta else "")
         self._index(
             None, cid, new_title, new_content, row["enterprise_id"], row["part"],
-            product_id=row["product_id"], chunk=row["chunk"] or "",
+            product_id=row["product_id"], chunk=row["chunk"] or "", kind=upd_kind,
         )
 
     def _add_corpus(self, cur, part, ent, product_id, title, text, meta,
@@ -314,20 +315,22 @@ class KnowledgeStore:
              product_id, chunk),
         )
         cid = cur.lastrowid
-        self._index(cur, cid, title, text, ent, part, product_id=product_id, chunk=chunk)
+        self._index(cur, cid, title, text, ent, part, product_id=product_id,
+                    chunk=chunk, kind=(meta or {}).get("kind", ""))
         return cid
 
     def _index(self, cur, cid: int, title: str, content: str, ent: str, part: str,
-               product_id=None, chunk: str = "") -> None:
+               product_id=None, chunk: str = "", kind: str = "") -> None:
         vec = embed(title + " " + content, self.embedding_kind)
-        # Chroma 向量（metadata 过滤用 enterprise_id；product_id 供结构化预过滤 $in）
+        # Chroma 向量（metadata 过滤用 enterprise_id；product_id 供结构化预过滤 $in；
+        # kind 供检索侧按内容类型路由/加权，F3）
         pid_meta = product_id if product_id is not None else -1
         self.collection.upsert(
             ids=[str(cid)],
             embeddings=[vec],
             documents=[content],
             metadatas=[{"enterprise_id": ent, "part": part,
-                        "product_id": pid_meta, "chunk": chunk}],
+                        "product_id": pid_meta, "chunk": chunk, "kind": kind}],
         )
         # SQLite FTS5 关键词索引（字级 token 化，CJK 可命中）
         # cur=None 时（如 update_corpus 在连接外重索引）自建连接写入
@@ -380,7 +383,15 @@ class KnowledgeStore:
         return ids
 
     def retrieve(self, query: str, enterprise_id: str, top_k: int = 5,
-                 filters: Optional[dict] = None) -> List[CorpusHit]:
+                 filters: Optional[dict] = None,
+                 kind_filter: Optional[List[str]] = None,
+                 kind_weight: Optional[dict] = None) -> List[CorpusHit]:
+        """混合检索。
+
+        kind_filter: 仅返回 meta.kind ∈ 该列表的命中（按内容类型路由，F3）。
+        kind_weight: {kind: 倍率} 对命中分数乘性加权（如育儿问答提高 article 权重），F3。
+        二者默认 None → 不过滤/不加权重，完全向后兼容。
+        """
         qvec = embed(query, self.embedding_kind)
 
         # 结构化预过滤：先把候选产品集圈定（filters=None 表示不限）
@@ -497,7 +508,15 @@ class KnowledgeStore:
                 g["best_chunk"] = c["chunk"]
         scored = []
         for g in groups.values():
-            final = g["best_score"] * (PRODUCT_BOOST if g["part"] in ("b_milk", "b_nutrition") else 1.0)
+            g_kind = g["meta"].get("kind", "")
+            # 路由（F3）：限定内容类型则丢弃非匹配 kind
+            if kind_filter is not None and g_kind not in kind_filter:
+                continue
+            # 加权（F3）：按 kind 乘性提升/压低（如育儿问答提高 article 权重）
+            w = kind_weight.get(g_kind, 1.0) if kind_weight else 1.0
+            final = (g["best_score"]
+                     * (PRODUCT_BOOST if g["part"] in ("b_milk", "b_nutrition") else 1.0)
+                     * w)
             scored.append((final, g))
         scored.sort(key=lambda x: -x[0])
         hits: List[CorpusHit] = []
