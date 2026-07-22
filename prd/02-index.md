@@ -5,13 +5,15 @@
 
 | 模块 ID | 职责（一句话） | 详解文件 | Harness 标签 | 状态 |
 |---------|----------------|----------|--------------|------|
-| MOD-knowledge-ingest | 爬虫/OCR/多源统一适配接口，知识入库 | `modules/MOD-knowledge-ingest.md` | ingest | partial（P1：统一接口+注册表+真实爬虫+管线，OCR/PDF 待续） |
+| MOD-knowledge-ingest | 数据采集归一 + 商品实体解析/分类；跨越两有界上下文（standalone 工具 `tools/dataproc/` ↔ agent 端 `src/ingest/importer`） | `modules/MOD-knowledge-ingest.md` | ingest | partial（P1 已绿：统一接口+注册表+真实爬虫+管线；P2/P3=工具侧 OCR/PDF+结构化/解析/分类 已设计；P4=agent 端 importer 加载 bundle 已设计；均待落地） |
 | MOD-kb | 企业定制知识库：分块/嵌入/向量检索（企业间隔离） | `modules/MOD-kb.md` | kb | partial（分块/嵌入/向量检索+独立重排器已跑通真实嵌入） |
 | MOD-agent | RAG 问答核心：检索增强+企业定制 prompt+可切换 LLM | `modules/MOD-agent.md` | agent | partial（RAG 核心+每企业可配置 LLM+约束块注入已落地） |
 | MOD-session | 多员工会话隔离：(企业×员工×会话) 三级隔离 | `modules/MOD-session.md` | session | partial（P1：用户约束抽取累积 B + 短期摘要压缩 A，注入 prompt） |
 | MOD-wechat | 个人微信(iLink Bot API)接入：消息收发/身份识别/去重 | `modules/MOD-wechat.md` | wechat | partial（iLink 网关+约束接线已落地） |
 | MOD-baby-profile | 宝宝/客户档案层：快速切换消歧+主动建档/归档+焦点注入 | `modules/MOD-baby-profile.md` | baby | partial（P2：存储+每轮消歧+混合式建档安全网+主动归档+焦点注入） |
 | MOD-deploy | 端侧 1家1实例部署：Docker/配置驱动/隔离 | `modules/MOD-deploy.md` | deploy | partial（P1：Windows 直装+依赖分层+URL拉取+可插拔配置+环境变量覆盖已落地） |
+
+> ⚠️ **新增有界上下文 `tools/dataproc/`**（standalone 数据处理工具，独立于 `src/`）：负责 crawl / OCR / 结构化抽取 / 实体解析 / 分类，产出 NDJSON bundle 产物契约；agent 端 `src/ingest/importer.py` 仅加载该 bundle。二者**彻底隔离**（工具不 `import src.*`、agent 不 `import` 工具），仅以产物契约为边界——详见 `modules/MOD-knowledge-ingest.md`「〇·产物契约」「〇·P4」。
 
 ## 加载纪律
 
