@@ -27,9 +27,22 @@ def main(argv=None) -> int:
     b.add_argument("--out", default=None, help="bundle 输出目录（默认 <repo>/.dataproc/bundle）")
     b.add_argument("--files", nargs="*", default=None, help="仅处理指定相对路径文件")
     b.add_argument("--folders", nargs="*", default=None, help="仅处理指定相对路径文件夹")
+    b.add_argument("--ocr", dest="ocr", action="store_true", default=None,
+                   help="开启 OCR 路径（等价 DATAPROC_OCR_ENABLED=1）")
+    b.add_argument("--no-ocr", dest="ocr", action="store_false",
+                   help="关闭 OCR 路径（默认，等价 DATAPROC_OCR_ENABLED=0）")
+    b.add_argument("--run-real-ocr", action="store_true",
+                   help="真正调用 PaddleOCR（需已装 paddlepaddle/paddleocr；等价 RUN_REAL_OCR=1）")
 
     args = ap.parse_args(argv)
     if args.cmd == "build":
+        # OCR 开关透传为环境变量，build_bundle 内的 load_config 会读取
+        if args.ocr is True:
+            os.environ["DATAPROC_OCR_ENABLED"] = "1"
+        elif args.ocr is False:
+            os.environ["DATAPROC_OCR_ENABLED"] = "0"
+        if args.run_real_ocr:
+            os.environ["RUN_REAL_OCR"] = "1"
         load_meta(args.repo_dir)  # 校验
         out = args.out or os.path.join(args.repo_dir, ".dataproc", "bundle")
         sel = None

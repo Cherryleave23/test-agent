@@ -81,7 +81,7 @@
 | `harness/test_dataproc_pdf.py` | 新 | `@module ingest`：I7 数字直抽 / I8 扫描件 OCR / I9 表格结构 / I11 缺依赖报错 |
 | `harness/test_dataproc_ocr.py` | 新 | `@module ingest`：I10 图片 OCR / I14 长图切片 / I15 预处理提升 / I16 无文字不编造；`RUN_REAL_OCR=1` 门控 |
 
-> 状态：**planned（P2，工具侧）**。落地后 `02-index.md` MOD-knowledge-ingest 升级、G1 进展；`test_dataproc_*` 由 ⏸ deferred 转已落地。
+> 状态：**✅ 已落地（P2，工具侧）**。OCR 适配器（pdf/image_table）真实代码路径 + `RUN_REAL_OCR=1` 门控 + 缺依赖优雅降级；`test_dataproc_*` 由 ⏸ deferred 转已落地。
 
 ### P2 harness 验收表（计划，`harness/test_dataproc_pdf.py` + `test_dataproc_ocr.py`，`@module ingest`）
 | 编号 | 断言 | 对应实现 | 门控 |
@@ -213,7 +213,7 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 | `tools/dataproc/cli.py` | 改 | `dataproc build` 串起 crawl→ocr→structure→resolve→classify→写 bundle |
 | `harness/test_dataproc_resolver.py` | 新 | `@module ingest`：RES1 抽取 / RES2 reg_number 更新 / RES3 元组兜底 / RES4 新建 pending / RES5 HQ 复用 / RES6 分类 / RES7 防跨实体误并 |
 
-> 状态：**planned（P3，工具侧）**。依赖 P2 落地；落地后 Q-DB1 由「待确认」转「已定」，`02-index.md` 升级、G1 进展。
+> 状态：**✅ 已落地（P3，工具侧）**。依赖 P2 已落地；Q-DB1 由「待确认」转「已定」（reg_number 优先 + 元组兜底 resolve）；`test_dataproc_resolver.py` 全绿。
 
 ### P3 harness 验收表（计划，`harness/test_dataproc_resolver.py`，`@module ingest`）
 | 编号 | 断言 | 对应实现 | 门控 |
@@ -420,11 +420,13 @@ gui/
 | I4 | 跨运行内容哈希去重：同页二次入库计数为 0 | `test_ingest_dedup` | ✅ P1 落地（持久化 `ingest_dedup` 表） |
 | I5 | 单适配器抛错不中断整批、失败留痕 | `test_ingest_resilient` | ✅ P1 落地 |
 | I6 | 集成：markdown → 产物 → importer → store，产品落 `products_milk` 且 retrieve 命中 | （桥接 MOD-kb + importer） | ✅ P1 落地（迁移后以 IMP6 强化） |
-| I7–I16 | PDF / OCR 适配器（**决策已定，见「〇·P2」**：PaddleOCR + PP-Structure / 端侧可选安装 / `RUN_REAL_OCR=1` 门控） | `test_dataproc_pdf` / `test_dataproc_ocr` | ⏸ 计划 P2（落地后转已落地） |
-| RES1–RES7 | 结构化抽取 + 实体解析 + 分类（**见「〇·P3」**，工具侧） | `test_dataproc_resolver` | ⏸ 计划 P3 |
+| I7–I16 | PDF / OCR 适配器（**决策已定，见「〇·P2」**：PaddleOCR + PP-Structure / 端侧可选安装 / `RUN_REAL_OCR=1` 门控） | `test_dataproc_pdf` / `test_dataproc_ocr` | ✅ 已落地（P2 OCR 适配器：I7 数字直抽默认绿 / I11 缺依赖显式报错 / I8-I10,I14-I16 真实 OCR 由 `RUN_REAL_OCR=1` 门控） |
+| RES1–RES7 | 结构化抽取 + 实体解析 + 分类（**见「〇·P3」**，工具侧） | `test_dataproc_resolver` | ✅ 已落地（P3 结构化管理+实体解析：RES1 规则抽取默认绿 / RES2 LLM 接线 / RES3 不编造 / RES4-5 resolve / RES6 MockProvider / RES7 JSON 失败退规则） |
 | IMP1–IMP6 | agent 端导入器加载 bundle → store → retrieve 命中（**见「〇·P4」**，隔离边界） | `test_importer` | ⏸ 计划 P4 |
 | F1 | `store.add_knowledge`/`add_hq_knowledge` 签名支持 `product_id`+`meta.kind`，hq 不再硬编码 `kind='hq_kb'` | `test_store_corpus_kind` | ✅ 已落地（F1 修复，corpus kind 语义去撞） |
 | F6 | `retrieve` 第 4 步放行 `HQ_ENT`：HQ 共享库（ent=`"hq"`）对全部企业可读，且企业间 b_kb 隔离仍成立 | `test_store_hq_retrieve` | ✅ 已修 `store.py`（方案②：回查条件 `ent not in (None, HQ_ENT) and ent != enterprise_id` 才丢弃）+ 回归 F6a–F6d 全绿 |
+| P2-OCR | OCR 适配器（pdf/image_table）：数字 PDF 直抽 I7 + 缺依赖显式报错 I11 + 真实 PaddleOCR/PP-Structure I8–I10/I14–I16（`RUN_REAL_OCR=1` 门控） | `test_dataproc_pdf` / `test_dataproc_ocr` | ✅ 已落地（默认轻量绿跑 + 重依赖门控 + 不编造） |
+| P3-STR | 结构化抽取 + 实体解析：`structurer` 规则兜底 + 工具自带 LLM provider 接线 + resolve（reg/tuple） | `test_dataproc_resolver` | ✅ 已落地（RES1–RES7 全绿，锚定原文不编造） |
 | G1–G5 | GUI 工作台：仓库/树嵌套/上传/标记去重/触发产 bundle（**见「〇·P5」**） | `test_gui_backend` | ✅ 后端 G1–G5 绿 + 前端 React SPA 构建通过 + Tauri 壳配置 |
 
 ---

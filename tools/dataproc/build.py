@@ -17,6 +17,10 @@ from typing import List, Optional
 
 from .repo import load_meta, TOP_FOLDERS, KIND_BY_TOP
 from .schema import ProductRecord, CorpusRecord, HQProductRecord
+from .config import load_config
+from .adapters import get_adapter, OCR_EXTS, IMAGE_EXTS, OCRDeferred, OCRDependencyMissing
+from .structurer import structure, resolve
+from .llms import from_config
 
 TOOL_VERSION = "dataproc 0.1.0"
 SCHEMA_VERSION = "1.0"
@@ -109,12 +113,98 @@ def _detect_product_uid(repo_dir: str, rel_path: str) -> str:
     return "tuple:" + _sha1(sub)
 
 
+def _load_known(catalog_path: str):
+    """加载已知商品目录（实体解析已知列表）。失败/缺失返回 None。"""
+    if not catalog_path or not os.path.isfile(catalog_path):
+        return None
+    out: List[dict] = []
+    try:
+        with open(catalog_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    out.append(json.loads(line))
+    except Exception:
+        return None
+    return out or None
+
+
+def _process_nontext(repo_dir, rel, full_path, kind, cfg, provider, known, state):
+    """处理非 md/txt 文件：尝试 OCR（若开启），可选结构化抽取（product_text）。
+
+    返回 (content, meta, optional product_dict, optional product_uid)。
+    - .pdf：数字文本层直抽始终尝试（轻量、无重依赖，I7 默认绿）；仅扫描件 OCR 需
+      ocr_enabled + run_real_ocr + PaddleOCR。
+    - 图片/规格表：需 ocr_enabled + run_real_ocr + PaddleOCR，否则保持 ocr_pending（I13）。
+    - 缺依赖/适配器抛错：记录 ocr_error、保持占位，不崩全局（I5/I11）。
+    """
+    ext = os.path.splitext(rel)[1].lower()
+
+    def _placeholder(meta_extra=None):
+        m = {"source": (ext.lstrip(".") or "file"), "path": rel, "ocr_pending": True}
+        if meta_extra:
+            m.update(meta_extra)
+        return "", m, None, None
+
+    if ext == ".pdf":
+        try:
+            res = get_adapter(ext).extract(full_path, cfg.run_real_ocr)
+        except OCRDeferred:
+            return _placeholder()
+        except Exception as e:
+            return _placeholder({"ocr_error": str(e)[:200]})
+    elif ext in IMAGE_EXTS:
+        if not (cfg.ocr_enabled and cfg.run_real_ocr):
+            return _placeholder()
+        try:
+            res = get_adapter(ext).extract(full_path, cfg.run_real_ocr)
+        except OCRDeferred:
+            return _placeholder()
+        except Exception as e:
+            return _placeholder({"ocr_error": str(e)[:200]})
+    else:
+        # md/txt：直接读正文（不标 ocr_pending）；其余未知扩展名：占位
+        if ext in (".md", ".txt"):
+            content = open(full_path, encoding="utf-8", errors="ignore").read()
+            return content, {"source": ext.lstrip("."), "path": rel}, None, None
+        return _placeholder()
+
+    content = res.text or ""
+    meta = {"source": (ext.lstrip(".") or "file"), "path": rel, "ocr": res.meta.get("ocr", False)}
+    for k, v in res.meta.items():
+        if k != "ocr":
+            meta[k] = v
+    product_dict = None
+    product_uid = None
+    if not content:
+        meta["ocr_pending"] = True
+    if content and kind == "product_text":
+        st = structure(content, provider)
+        if st.fields:
+            r = resolve(st.fields, known)
+            product_uid = r["uid"]
+            product_dict = ProductRecord(
+                kind="milk", uid=r["uid"], status=r["status"], source_ref=rel,
+                resolved=r["resolved"], fields=st.fields,
+            ).to_dict()
+            if st.provider_used not in ("rule-only", "rule-only(fallback)"):
+                state["structuring_provider"] = f"{st.provider_used}://{cfg.llm.model}"
+            else:
+                state["structuring_provider"] = "rule-only"
+    return content, meta, product_dict, product_uid
+
+
 # ---------- 核心：构建 bundle ----------
 def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) -> dict:
     meta = load_meta(repo_dir)
     namespace = meta.get("namespace", "b")
     ent_id = meta.get("enterprise_id", "ent_unknown")
     part = "hq_kb" if namespace == "hq" else "b_kb"
+
+    cfg = load_config()
+    provider = from_config(cfg.llm)
+    known = _load_known(cfg.known_catalog)
+    state = {"structuring_provider": "none (Tier, 待配置)"}
 
     products: List[dict] = []
     corpus: List[dict] = []
@@ -150,14 +240,17 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
                     content=body, product_uid=uid,
                     meta={"source": "md", "path": rel}, lang="zh").to_dict())
             else:
-                content = ""
-                if ext in (".md", ".txt"):
-                    content = open(full_path, encoding="utf-8", errors="ignore").read()
+                content, meta, product_dict, product_uid = _process_nontext(
+                    repo_dir, rel, full_path, kind, cfg, provider, known, state)
+                if product_dict:
+                    products.append(product_dict)
+                    if namespace == "hq":
+                        hq_products.append(HQProductRecord(
+                            kind="milk", fields=product_dict["fields"],
+                            meta={"vendor": ent_id}).to_dict())
                 corpus.append(CorpusRecord(
                     part=part, kind=kind, title=os.path.basename(rel), content=content,
-                    meta={"source": (ext.lstrip(".") or "file"), "path": rel,
-                          "ocr_pending": ext not in (".md", ".txt")},
-                    lang="zh").to_dict())
+                    product_uid=product_uid, meta=meta, lang="zh").to_dict())
 
     os.makedirs(out_dir, exist_ok=True)
 
@@ -184,7 +277,7 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None) 
             n: _sha_file(os.path.join(out_dir, n))
             for n in ("products.ndjson", "corpus.ndjson", "hq_products.ndjson")
         },
-        "structuring_provider": "none (Tier, 待配置)",
+        "structuring_provider": state["structuring_provider"],
     }
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
