@@ -12,12 +12,16 @@ from wechat.ilink_client import ILinkClient
 from wechat.gateway import WechatGateway
 from baby.store import BabyProfileStore
 from ingest.protocol import SeedAdapter
+from ingest.importer import load_on_startup  # F4：启动扫收件箱自动加载 bundle
 from kb.models import MilkProduct, NutritionProduct
 
 
 def build_instance(cfg: EnterpriseConfig):
     store = KnowledgeStore(cfg.db_path, embedding_kind=cfg.embedding.kind,
                            rerank_kind=cfg.rerank.kind)
+    # F4：agent 启动钩子——若配置了 BUNDLE_INBOX_DIR，自动扫目录加载 dataproc 产出的 bundle；
+    # 未配置（默认/测试）则为 no-op，不影响既有行为。
+    load_on_startup(store, cfg.enterprise_id)
     session = SessionStore(cfg.db_path)
     # A1 修复：装配 BabyProfileStore 并传给 WechatGateway
     # 原缺陷：build_instance 未创建 baby_store，导致 gateway.baby_store 永远 None，

@@ -157,6 +157,29 @@ class KnowledgeStore:
             conn.commit()
             return cid
 
+    # ---------- 写：HQ 商品库（厂商侧复用，onboarding 播种）----------
+    def add_hq_product(self, fields: dict, meta: Optional[dict] = None) -> int:
+        with connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO hq_products(kind, brand, name, reg_number, meta_json) "
+                "VALUES(?,?,?,?,?)",
+                (fields.get("kind"), fields.get("brand"), fields.get("name"),
+                 fields.get("reg_number"),
+                 json.dumps(meta or {}, ensure_ascii=False)),
+            )
+            pid = cur.lastrowid
+            conn.commit()
+            return pid
+
+    def get_hq_products(self) -> List[dict]:
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, kind, brand, name, reg_number, meta_json "
+                "FROM hq_products"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     # ---------- 写：企业自有 RAG 知识（采集归一后的文本源：web/text/pdf/...）----------
     def add_knowledge(self, enterprise_id: str, title: str, content: str,
                      meta: Optional[dict] = None, product_id: Optional[int] = None) -> int:
