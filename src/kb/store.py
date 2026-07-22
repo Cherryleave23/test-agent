@@ -3,7 +3,7 @@
 - 向量检索：**Chroma 嵌入式 PersistentClient**（每实例一个持久化目录 = 物理企业隔离；
   原生 metadata 过滤按 enterprise_id 强化隔离；HQ 共享库以 enterprise_id='hq'）。
 - 结构化产品表 + 会话 + 关键词索引：**SQLite**（同实例库）。
-- HQ 知识库（共享，随分发）：corpus.part='hq_kb'，enterprise_id IS NULL（Chroma 中 'hq'）。
+- HQ 知识库（共享，随分发）：corpus.part='hq_kb'，enterprise_id='hq'（SQLite 与 Chroma 一致，见 HQ_ENT）。
 - B-end 结构化产品：products_milk / products_nutrition（每企业隔离）。
 - 统一检索语料 corpus(FTS5) + Chroma 向量，RRF 混合检索。
 - HQ 商品库（厂商侧复用）：hq_products，onboarding 播种用。
@@ -363,7 +363,12 @@ class KnowledgeStore:
                 ).fetchone()
                 if not row:
                     continue
-                if row["enterprise_id"] is not None and row["enterprise_id"] != enterprise_id:
+                # HQ 共享库（enterprise_id == HQ_ENT）对所有企业可见；其余仅本企业可见。
+                # 修复 F6：原条件把 HQ 行（"hq"）当成「异企业」直接丢弃，导致总部知识库
+                # 跨企业不可读，废掉了「总部资料库一键共享」设计。
+                if (row["enterprise_id"] is not None
+                        and row["enterprise_id"] != HQ_ENT
+                        and row["enterprise_id"] != enterprise_id):
                     continue
                 meta = json.loads(row["meta_json"] or "{}")
                 # 结构化过滤（防御纵深）：meta 中字段需与 filters 完全匹配

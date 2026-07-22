@@ -77,7 +77,7 @@ def main():
         fails.append(f"F1c: 旧式调用 meta 应为空 dict，实际 {r['meta_json']}")
 
     # F1d: 同企业 ingredient（b_kb, product_id 绑定）可被 retrieve 命中，且 hit.meta.kind 存活
-    # （注：hq_kb 跨企业可读性问题属独立发现 F6，不在 F1 范围，此处不断言）
+    # （hq_kb 跨企业可读性已由 F6 修复并单独立 `harness/test_store_hq_retrieve.py` 回归，此处不重复断言）
     hits_ing = store.retrieve("DHA 脑发育 婴幼儿", "ent_b", top_k=5)
     ing_kinds = [h.meta.get("kind") for h in hits_ing]
     if not any(k == "ingredient" for k in ing_kinds):

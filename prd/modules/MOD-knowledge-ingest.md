@@ -424,6 +424,7 @@ gui/
 | RES1–RES7 | 结构化抽取 + 实体解析 + 分类（**见「〇·P3」**，工具侧） | `test_dataproc_resolver` | ⏸ 计划 P3 |
 | IMP1–IMP6 | agent 端导入器加载 bundle → store → retrieve 命中（**见「〇·P4」**，隔离边界） | `test_importer` | ⏸ 计划 P4 |
 | F1 | `store.add_knowledge`/`add_hq_knowledge` 签名支持 `product_id`+`meta.kind`，hq 不再硬编码 `kind='hq_kb'` | `test_store_corpus_kind` | ✅ 已落地（F1 修复，corpus kind 语义去撞） |
+| F6 | `retrieve` 第 4 步放行 `HQ_ENT`：HQ 共享库（ent=`"hq"`）对全部企业可读，且企业间 b_kb 隔离仍成立 | `test_store_hq_retrieve` | ✅ 已修 `store.py`（方案②：回查条件 `ent not in (None, HQ_ENT) and ent != enterprise_id` 才丢弃）+ 回归 F6a–F6d 全绿 |
 | G1–G5 | GUI 工作台：仓库/树嵌套/上传/标记去重/触发产 bundle（**见「〇·P5」**） | `test_gui_backend` | ✅ 后端 G1–G5 绿 + 前端 React SPA 构建通过 + Tauri 壳配置 |
 
 ---
@@ -448,4 +449,4 @@ gui/
 | **F3** | 🟠高 | retrieve 侧未用 `meta.kind` 路由/加权：产品问答 vs 育儿知识 vs 成分机制未分流 | 跨模块：MOD-agent 检索逻辑按 `kind` 过滤/加权（Chroma metadata 已带 `part`/`product_id`，需补 `kind`） |
 | **F4** | 🟡中 | bundle 运输 + 触发未定义：工具产包 → 送达企业端 agent 实例 → 谁触发 `load_bundle` | 明确：vendor 运维产包 / 企业 IT 拷包 / agent 启动扫目录 / 或微信管理指令 |
 | **F5** | 🟡中 | `pending` 商品确认 UX 未定义：resolver 产 `status=pending`，员工在 agent 端确认/合并/删除流未闭环 | 微信侧 pending 列表展示 + 确认动作流（可并入 MOD-wechat 管理指令） |
-| **F6** | 🔴新发现 | `retrieve` 第 4 步回查 `if enterprise_id is not None and != 运行实例: continue` 把 `hq_kb` 行（ent=`"hq"`）**全部丢弃**，导致 HQ 共享库跨企业实际不可读，Chroma `where` 联合 `HQ_ENT` 成死代码 | 修复二选一：① `add_hq_knowledge` 存 `enterprise_id=NULL`（同表、`part` 区分）；② 回查步骤放行 `HQ_ENT`。需与 F2 只读策略一并定 |
+| **F6** | 🔴已修 | `retrieve` 第 4 步回查 `if enterprise_id is not None and != 运行实例: continue` 把 `hq_kb` 行（ent=`"hq"`）**全部丢弃**，导致 HQ 共享库跨企业实际不可读，Chroma `where` 联合 `HQ_ENT` 成死代码 | ✅ 已修 `store.py`（**方案②**：回查条件改为 `ent not in (None, HQ_ENT) and ent != enterprise_id` 才丢弃，HQ 对所有企业可见；同步把模块 docstring 的 `enterprise_id IS NULL` 对齐为实际 `enterprise_id='hq'`）+ 回归 `harness/test_store_hq_retrieve.py`（F6a 本企业读 HQ / F6b 异企业读 HQ / F6c 异企业不读他企 b_kb / F6d HQ ingredient 可读且 kind 存活，全绿）。F2 只读策略按原计划另补 |
