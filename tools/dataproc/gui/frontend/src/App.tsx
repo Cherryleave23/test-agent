@@ -1,14 +1,15 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import { api } from "./api";
 import RepoBar from "./components/RepoBar";
 import TreePanel from "./components/TreePanel";
 import DropZone from "./components/DropZone";
 import ProcessPanel from "./components/ProcessPanel";
+import LogPanel from "./components/LogPanel";
 import ProcessedPanel from "./components/ProcessedPanel";
 import SettingsPanel from "./components/SettingsPanel";
 
 interface RepoList {
-  repos: { name: string; enterprise_id: string; namespace: string }[];
+  repos: { name: string; enterprise_id: string; namespace: string; output_dir?: string }[];
   current: string | null;
 }
 interface TreeData {
@@ -23,10 +24,21 @@ interface Settings {
   output_dir: string;
   repos_base: string;
 }
+interface ProcessStatus {
+  status: string;
+  total: number;
+  processed: number;
+  skipped: number;
+  current_file: string;
+  logs: string[];
+  error: string;
+  elapsed: number;
+}
 
 export default function App() {
   const [repoList, setRepoList] = useState<RepoList>({ repos: [], current: null });
   const [current, setCurrent] = useState<string>("");
+  const [currentOutputDir, setCurrentOutputDir] = useState<string>("");
   const [tree, setTree] = useState<TreeData | null>(null);
   const [currentFolder, setCurrentFolder] = useState<string>("");
   const [selFiles, setSelFiles] = useState<Set<string>>(new Set());
@@ -35,12 +47,14 @@ export default function App() {
   const [bundle, setBundle] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [procStatus, setProcStatus] = useState<ProcessStatus | null>(null);
   const [settings, setSettings] = useState<Settings>({
     ocr_enabled: false,
     run_real_ocr: false,
     output_dir: "",
     repos_base: "",
   });
+  const pollRef = useRef<number | null>(null);
 
   const processedPaths = new Set(
     markers.map((m: any) => m.rel_path || m.path || "").filter(Boolean)
@@ -74,6 +88,16 @@ export default function App() {
     }
   }, []);
 
+  // 更新当前仓库的 output_dir（优先仓库级，其次全局 settings）
+  const updateOutputDir = useCallback((repoName: string) => {
+    const repo = repoList.repos.find((r) => r.name === repoName);
+    if (repo?.output_dir) {
+      setCurrentOutputDir(repo.output_dir);
+    } else {
+      setCurrentOutputDir(settings.output_dir || "");
+    }
+  }, [repoList.repos, settings.output_dir]);
+
   useEffect(() => {
     loadRepos().then((r) => {
       const name = r.current || (r.repos[0] && r.repos[0].name);
@@ -81,9 +105,45 @@ export default function App() {
         setCurrent(name);
         loadTree(name, "");
         loadProcessed(name);
+        const repo = r.repos.find((rp: any) => rp.name === name);
+        setCurrentOutputDir(repo?.output_dir || "");
       }
     });
   }, []);
+
+  // 处理状态轮询（提升到 App 层，供 ProcessPanel 和 LogPanel 共享）
+  useEffect(() => {
+    if (!busy) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      api.processStatus().then(setProcStatus).catch(() => {});
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const s = await api.processStatus();
+        setProcStatus(s);
+        if (s.status !== "running") {
+          if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+        }
+      } catch {}
+    };
+    poll();
+    pollRef.current = window.setInterval(poll, 1500);
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [busy]);
 
   const openRepo = async (name: string) => {
     await api.switchRepo(name);
@@ -93,11 +153,12 @@ export default function App() {
     await loadTree(name, "");
     await loadProcessed(name);
     await loadRepos();
+    updateOutputDir(name);
   };
 
-  const createRepo = async (name: string, ns: string, path?: string) => {
+  const createRepo = async (name: string, ns: string, path?: string, outputDir?: string) => {
     try {
-      await api.createRepo(name, ns, path);
+      await api.createRepo(name, ns, path, outputDir);
       await loadRepos();
       await openRepo(name);
       setMsg(`仓库「${name}」已创建`);
@@ -160,7 +221,6 @@ export default function App() {
     try {
       let uploaded = 0;
       for (const f of files) {
-        // 如果文件名含路径（来自文件夹拖入），保留子目录结构
         const folder = currentFolder
           ? currentFolder + (f.name.includes("/") ? "/" + f.name.split("/").slice(0, -1).join("/") : "")
           : (f.name.includes("/") ? f.name.split("/").slice(0, -1).join("/") : "");
@@ -204,12 +264,10 @@ export default function App() {
     setBusy(true);
     setMsg(full ? "全量处理中…" : "选择性处理中…");
     try {
-      const resp = await api.process(current, selection, force, settings.output_dir || "");
+      const resp = await api.process(current, selection, force, currentOutputDir || "");
 
-      // 异步处理：如果立即返回 started，则轮询直到完成
       if (resp.status === "started") {
         setMsg(`处理已启动：${resp.total} 个文件（跳过 ${resp.skipped} 个已处理）`);
-        // 轮询等待完成（ProcessPanel 也会同时轮询显示进度）
         const poll = async (): Promise<void> => {
           const s = await api.processStatus();
           if (s.status === "running") {
@@ -228,10 +286,8 @@ export default function App() {
           setMsg(`处理完成：${procCount} 个文件，跳过 ${skipCount} 个`);
         }
       } else if (resp.status === "done") {
-        // 所有文件已跳过
         setMsg(`全部跳过：${resp.skipped} 个文件已处理且内容未变。勾选「强制重新处理」可重新处理。`);
       } else {
-        // 兼容旧同步返回格式
         const procCount = resp.processed_files?.length || 0;
         const skipCount = resp.skipped || 0;
         setMsg(`处理完成：${procCount} 个文件，跳过 ${skipCount} 个`);
@@ -282,6 +338,20 @@ export default function App() {
           onRmdir={onRmdir}
         />
         <section className="center">
+          <ProcessPanel
+            busy={busy}
+            hasSelection={selFiles.size > 0 || selFolders.size > 0}
+            outputDir={currentOutputDir}
+            status={procStatus}
+            onProcess={doProcess}
+            onClearMarkers={onClearMarkers}
+          />
+        </section>
+        <ProcessedPanel markers={markers} bundle={bundle} />
+        <section className="reserved" />
+      </div>
+      <div className="bottom-row">
+        <div className="bottom-left">
           <DropZone
             current={current}
             currentFolder={currentFolder}
@@ -289,15 +359,10 @@ export default function App() {
             onFiles={onFiles}
             onOsPaths={onOsPaths}
           />
-          <ProcessPanel
-            busy={busy}
-            hasSelection={selFiles.size > 0 || selFolders.size > 0}
-            outputDir={settings.output_dir}
-            onProcess={doProcess}
-            onClearMarkers={onClearMarkers}
-          />
-        </section>
-        <ProcessedPanel markers={markers} bundle={bundle} />
+        </div>
+        <div className="bottom-right">
+          <LogPanel status={procStatus} />
+        </div>
       </div>
     </div>
   );

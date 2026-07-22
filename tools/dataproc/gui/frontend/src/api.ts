@@ -24,8 +24,8 @@ async function req(method: string, path: string, body?: any, isForm = false): Pr
 
 export const api = {
   listRepos: () => req("GET", "/repos"),
-  createRepo: (name: string, ns: string, path?: string) =>
-    req("POST", "/repos", { name, namespace: ns, path: path || null }),
+  createRepo: (name: string, ns: string, path?: string, outputDir?: string) =>
+    req("POST", "/repos", { name, namespace: ns, path: path || null, output_dir: outputDir || null }),
   switchRepo: (name: string) => {
     const fd = new FormData();
     fd.append("name", name);

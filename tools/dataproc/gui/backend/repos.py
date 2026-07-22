@@ -155,7 +155,7 @@ def _meta_path(repo_dir: str) -> str:
 
 
 def create_repo(name: str, namespace: str = "b", base: str = None,
-                custom_path: str = None) -> dict:
+                custom_path: str = None, output_dir: str = None) -> dict:
     """新建仓库或初始化已有目录为仓库。
 
     Args:
@@ -164,6 +164,8 @@ def create_repo(name: str, namespace: str = "b", base: str = None,
         base: REPOS_BASE（通常不需要传）
         custom_path: 自定义磁盘路径。如果指定且目录已存在，则初始化为仓库
                      （补建 .dataproc 和三大总文件夹），不报错。
+        output_dir: 每仓库独立输出目录。如果指定，bundle 产物将写入该目录
+                    而非全局 settings.output_dir 或仓库内 .dataproc/bundle。
     """
     base = base or get_repos_base()
     repo_dir = _repo_disk_path(base, name, custom_path)
@@ -186,6 +188,8 @@ def create_repo(name: str, namespace: str = "b", base: str = None,
         "created_at": now_iso(),
         "disk_path": repo_dir,
     }
+    if output_dir:
+        meta["output_dir"] = output_dir
     with open(_meta_path(repo_dir), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     for tf in TOP_FOLDERS:

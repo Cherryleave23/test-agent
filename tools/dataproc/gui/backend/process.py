@@ -62,10 +62,10 @@ def _make_progress_cb():
 def process(name: str, selection: dict = None, base: str = None,
             force: bool = False, out_dir: str = None) -> dict:
     """同步处理（兼容旧接口，测试用）。"""
-    repo_dir, _meta = get_repo(name, base)
+    repo_dir, meta = get_repo(name, base)
     _apply_ocr_env()
     s = _load_gui_settings()
-    actual_out = out_dir or s.get("output_dir") or os.path.join(repo_dir, ".dataproc", "bundle")
+    actual_out = out_dir or meta.get("output_dir") or s.get("output_dir") or os.path.join(repo_dir, ".dataproc", "bundle")
 
     all_files = expand_selection(repo_dir, selection)
     if force:
@@ -104,10 +104,10 @@ def process_async(name: str, selection: dict = None, base: str = None,
     if cur["status"] == "running":
         return {"error": "已有处理任务在运行", "status": cur}
 
-    repo_dir, _meta = get_repo(name, base)
+    repo_dir, meta = get_repo(name, base)
     _apply_ocr_env()
     s = _load_gui_settings()
-    actual_out = out_dir or s.get("output_dir") or os.path.join(repo_dir, ".dataproc", "bundle")
+    actual_out = out_dir or meta.get("output_dir") or s.get("output_dir") or os.path.join(repo_dir, ".dataproc", "bundle")
 
     all_files = expand_selection(repo_dir, selection)
     if force:

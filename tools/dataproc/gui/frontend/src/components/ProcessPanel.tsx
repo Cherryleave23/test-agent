@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
-import { api } from "../api";
+import React, { useState } from "react";
 
 interface ProcessStatus {
   status: string;
@@ -16,65 +15,19 @@ interface Props {
   busy: boolean;
   hasSelection: boolean;
   outputDir: string;
+  status: ProcessStatus | null;
   onProcess: (full: boolean, force: boolean) => void;
   onClearMarkers: () => void;
 }
 
-export default function ProcessPanel({ busy, hasSelection, outputDir, onProcess, onClearMarkers }: Props) {
+export default function ProcessPanel({ busy, hasSelection, outputDir, status, onProcess, onClearMarkers }: Props) {
   const [force, setForce] = useState(false);
-  const [status, setStatus] = useState<ProcessStatus | null>(null);
-  const pollRef = useRef<number | null>(null);
-  const logEndRef = useRef<HTMLDivElement>(null);
-
-  // 轮询处理进度
-  useEffect(() => {
-    if (!busy) {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      // 最后拉一次状态
-      api.processStatus().then(setStatus).catch(() => {});
-      return;
-    }
-
-    // 每 1.5 秒轮询
-    const poll = async () => {
-      try {
-        const s = await api.processStatus();
-        setStatus(s);
-        if (s.status !== "running") {
-          if (pollRef.current) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
-          }
-        }
-      } catch {}
-    };
-    poll();
-    pollRef.current = window.setInterval(poll, 1500);
-
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [busy]);
-
-  // 自动滚动到最新日志
-  useEffect(() => {
-    if (logEndRef.current) {
-      logEndRef.current.scrollTop = logEndRef.current.scrollHeight;
-    }
-  }, [status?.logs]);
 
   const pct = status && status.total > 0
     ? Math.round(((status.processed + status.skipped) / status.total) * 100)
     : 0;
 
   const showProgress = busy || (status && status.status === "running");
-  const showLogs = status && status.logs && status.logs.length > 0;
 
   return (
     <div className="process">
@@ -112,44 +65,25 @@ export default function ProcessPanel({ busy, hasSelection, outputDir, onProcess,
       </button>
 
       {/* 进度条 */}
-      {showProgress && (
+      {showProgress && status && (
         <div className="progress-bar-container">
           <div className="progress-info">
             <span>
-              {status!.processed}/{status!.total} 已处理
-              {status!.skipped > 0 && `（跳过 ${status!.skipped}）`}
+              {status.processed}/{status.total} 已处理
+              {status.skipped > 0 && `（跳过 ${status.skipped}）`}
             </span>
             <span>{pct}%</span>
-            {status!.elapsed > 0 && <span className="elapsed">{status!.elapsed}s</span>}
+            {status.elapsed > 0 && <span className="elapsed">{status.elapsed}s</span>}
           </div>
           <div className="progress-bar-track">
             <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
           </div>
-          {status!.current_file && (
-            <div className="progress-current" title={status!.current_file}>
-              正在处理: {status!.current_file}
+          {status.current_file && (
+            <div className="progress-current" title={status.current_file}>
+              正在处理: {status.current_file}
             </div>
           )}
         </div>
-      )}
-
-      {/* 实时日志 */}
-      {showLogs && (
-        <div className="process-logs" ref={logEndRef}>
-          {status!.logs.map((log, i) => (
-            <div key={i} className={`log-line ${log.startsWith("✗") ? "log-error" : log.startsWith("✓") ? "log-ok" : ""}`}>
-              {log}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 完成状态 */}
-      {!busy && status && status.status === "done" && (
-        <div className="process-done">处理完成</div>
-      )}
-      {!busy && status && status.status === "error" && (
-        <div className="process-error">处理失败: {status.error}</div>
       )}
 
       {outputDir && (

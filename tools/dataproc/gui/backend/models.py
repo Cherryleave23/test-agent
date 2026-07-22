@@ -8,6 +8,7 @@ class RepoCreate(BaseModel):
     name: str
     namespace: str = "b"  # b=企业自有；hq=总部共享库
     path: Optional[str] = None  # 自定义磁盘路径（None=使用默认 REPOS_BASE）
+    output_dir: Optional[str] = None  # 每仓库独立输出目录（None=使用仓库内 .dataproc/bundle）
 
 
 class ProcessRequest(BaseModel):

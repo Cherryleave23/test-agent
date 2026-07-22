@@ -17,6 +17,8 @@ body {
   background: var(--bg);
   color: var(--text);
 }
+
+/* ===== 主布局：顶部栏 + 消息栏 + 主区(上) + 底部横排(下) ===== */
 .app { display: flex; flex-direction: column; height: 100vh; }
 
 .repobar {
@@ -30,18 +32,41 @@ body {
 }
 .repobar button { cursor: pointer; }
 .repobar button:hover { border-color: var(--accent); }
-.newrepo { display: inline-flex; gap: 6px; }
 .cur-ent { margin-left: auto; color: var(--muted); font-size: 12px; }
 
-.msg { padding: 6px 16px; font-size: 12px; color: var(--muted); background: #12161b; }
+.msg-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 16px; background: #12161b;
+}
+.msg { padding: 0; font-size: 12px; color: var(--muted); }
 
-.main { display: flex; flex: 1; min-height: 0; }
-.tree, .processed {
-  width: 320px; background: var(--panel); border-right: 1px solid var(--line);
+/* 主区（上部）：四栏 — 资料树 | 处理控制 | 已处理 | 预留空间 */
+.main { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.tree {
+  width: 240px; min-width: 240px; background: var(--panel); border-right: 1px solid var(--line);
   overflow: auto; padding: 10px;
 }
-.processed { border-right: none; border-left: 1px solid var(--line); width: 300px; }
 .center { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 12px; overflow: auto; }
+.processed {
+  width: 240px; min-width: 240px; background: var(--panel); border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line); overflow: auto; padding: 10px;
+}
+.reserved {
+  flex: 0 0 200px; background: var(--panel); border-left: 1px solid var(--line);
+  overflow: auto; padding: 10px;
+}
+
+/* 底部横排：左拖拽 + 右日志 */
+.bottom-row {
+  display: flex; height: 220px; min-height: 160px; border-top: 1px solid var(--line);
+}
+.bottom-left {
+  flex: 1; padding: 12px; border-right: 1px solid var(--line); overflow: auto;
+  display: flex; flex-direction: column;
+}
+.bottom-right {
+  flex: 1; padding: 12px; overflow: auto; display: flex; flex-direction: column;
+}
 
 .tree-head, .processed-head, .process-head {
   display: flex; justify-content: space-between; align-items: center;
@@ -62,16 +87,19 @@ ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
 .fsize { margin-left: auto; color: var(--muted); font-size: 11px; }
 .empty { color: var(--muted); font-size: 12px; padding: 6px; }
 
+/* ===== 拖拽区 ===== */
 .dropzone {
-  border: 2px dashed var(--line); border-radius: 14px; padding: 36px;
+  border: 2px dashed var(--line); border-radius: 14px; padding: 24px;
   text-align: center; cursor: pointer; color: var(--muted); transition: 0.15s;
   background: linear-gradient(180deg, #141821, #10141a);
+  flex: 1; display: flex; flex-direction: column; justify-content: center;
 }
 .dropzone.over { border-color: var(--accent); color: var(--text); background: #16202e; }
 .dropzone.disabled { cursor: default; opacity: 0.5; }
-.dz-title { font-size: 15px; color: var(--text); margin-bottom: 6px; }
+.dz-title { font-size: 14px; color: var(--text); margin-bottom: 6px; }
 .dz-sub { font-size: 12px; }
 
+/* ===== 处理控制面板 ===== */
 .process button {
   display: block; width: 100%; margin: 6px 0; padding: 10px; border-radius: 10px;
   border: 1px solid var(--line); background: var(--panel2); color: var(--text);
@@ -89,7 +117,15 @@ ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
 .progress-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s ease; }
 .progress-current { font-size: 11px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 实时日志 */
+/* 实时日志（底部日志面板专用） */
+.log-panel { display: flex; flex-direction: column; height: 100%; }
+.log-panel-logs {
+  flex: 1; overflow-y: auto; margin: 8px 0;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px; font-size: 11px; font-family: 'Cascadia Code', 'Consolas', monospace;
+  max-height: none;
+}
+/* 兼容旧引用 */
 .process-logs {
   max-height: 200px; overflow-y: auto; margin: 8px 0;
   background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
@@ -152,15 +188,49 @@ ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
 .proc-tree-file:hover { background: var(--panel2); }
 .proc-dot { color: var(--accent2); font-size: 11px; margin-left: auto; }
 
-/* 新建仓库路径输入 */
-.path-input { width: 180px; }
-
-/* 消息栏 + 设置按钮 */
-.msg-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 4px 16px; background: #12161b;
+/* ===== 新建仓库弹窗 ===== */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6); z-index: 200;
+  display: flex; align-items: center; justify-content: center;
 }
-.msg-bar .msg { padding: 0; }
+.modal-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 24px; min-width: 420px; max-width: 520px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.modal-title {
+  font-weight: 700; font-size: 16px; margin-bottom: 16px; color: var(--text);
+}
+.modal-row {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+}
+.modal-label {
+  width: 70px; flex-shrink: 0; font-size: 13px; color: var(--muted);
+}
+.modal-input, .modal-select {
+  flex: 1; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 13px;
+}
+.modal-input:focus, .modal-select:focus {
+  outline: none; border-color: var(--accent);
+}
+.modal-hint {
+  font-size: 11px; color: var(--muted); margin: 4px 0 16px 82px;
+}
+.modal-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+}
+.modal-btn {
+  padding: 8px 20px; border-radius: 8px; font-size: 13px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+}
+.modal-cancel:hover { border-color: var(--muted); }
+.modal-ok {
+  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+}
+.modal-ok:disabled { opacity: 0.5; cursor: not-allowed; }
+.modal-ok:not(:disabled):hover { opacity: 0.9; }
 
 /* 设置面板 */
 .settings-panel { position: relative; }
@@ -210,12 +280,13 @@ ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
 .clear-btn:hover { opacity: 0.8; }
 
 /* 路径选择器 */
-.path-picker { display: inline-flex; align-items: center; gap: 2px; }
+.path-picker { display: inline-flex; align-items: center; gap: 2px; flex: 1; }
 .path-picker button {
   background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; white-space: nowrap;
 }
 .path-picker button:hover { border-color: var(--accent); color: var(--text); }
+.path-input { width: 100%; }
 
 /* 磁盘路径显示 */
 .disk-path { color: var(--muted); font-size: 11px; }

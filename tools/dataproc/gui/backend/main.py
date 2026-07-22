@@ -67,7 +67,9 @@ def get_repos():
 @app.post("/repos")
 def create_repo(body: RepoCreate):
     try:
-        meta = repos.create_repo(body.name, body.namespace, custom_path=body.path)
+        meta = repos.create_repo(body.name, body.namespace,
+                                 custom_path=body.path,
+                                 output_dir=body.output_dir)
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except OSError as e:
@@ -164,9 +166,16 @@ def get_process_status():
 
 @app.get("/bundle")
 def get_bundle(name: str):
-    repo_dir, _meta = repos.get_repo(name)
+    repo_dir, meta = repos.get_repo(name)
 
-    # 检查自定义输出目录（settings.output_dir）或默认位置
+    # 检查输出目录：优先级 仓库级 output_dir > 全局 settings.output_dir > 默认位置
+    repo_out = meta.get("output_dir") or ""
+    if repo_out:
+        bp = os.path.join(repo_out, "manifest.json")
+        if os.path.isfile(bp):
+            with open(bp, encoding="utf-8") as f:
+                return JSONResponse(json.load(f), media_type="application/json")
+
     s = _load_gui_settings()
     out_dir = s.get("output_dir") or ""
     if out_dir:

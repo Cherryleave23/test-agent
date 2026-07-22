@@ -5,45 +5,42 @@ interface Repo {
   enterprise_id: string;
   namespace: string;
   disk_path?: string;
+  output_dir?: string;
 }
 interface Props {
   repoList: { repos: Repo[]; current: string | null };
   current: string;
   onOpen: (name: string) => void;
-  onCreate: (name: string, ns: string, path?: string) => void;
+  onCreate: (name: string, ns: string, path?: string, outputDir?: string) => void;
 }
 
 export default function RepoBar({ repoList, current, onOpen, onCreate }: Props) {
-  const [showNew, setShowNew] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
   const [ns, setNs] = useState("b");
   const [path, setPath] = useState("");
+  const [outputDir, setOutputDir] = useState("");
 
-  const browse = async () => {
-    // 优先使用 File System Access API（Chrome/Edge 86+）
+  const browse = async (setter: (v: string) => void) => {
     const w = window as any;
     if (w.showDirectoryPicker) {
       try {
         const handle = await w.showDirectoryPicker({ mode: "readwrite" });
-        setPath(handle.name); // 只能拿到目录名，实际路径需后端拼接
-        // 在 Web 环境中无法获取完整磁盘路径，提示用户手动确认
+        setter(handle.name);
         return;
       } catch (e) {
-        if ((e as any).name === "AbortError") return; // 用户取消
-        // 降级到手动输入
+        if ((e as any).name === "AbortError") return;
       }
     }
-    // 降级：用 <input webkitdirectory> 让用户选择目录
     const input = document.createElement("input");
     input.type = "file";
     input.setAttribute("webkitdirectory", "");
     input.onchange = () => {
       const files = input.files;
       if (files && files.length > 0) {
-        // webkitRelativePath 包含目录名路径
         const relPath = (files[0] as any).webkitRelativePath as string;
         const dirName = relPath.split("/")[0];
-        setPath(dirName);
+        setter(dirName);
       }
     };
     input.click();
@@ -51,10 +48,18 @@ export default function RepoBar({ repoList, current, onOpen, onCreate }: Props) 
 
   const submit = () => {
     if (!name.trim()) return;
-    onCreate(name.trim(), ns, path.trim() || undefined);
+    onCreate(name.trim(), ns, path.trim() || undefined, outputDir.trim() || undefined);
     setName("");
     setPath("");
-    setShowNew(false);
+    setOutputDir("");
+    setShowModal(false);
+  };
+
+  const cancel = () => {
+    setName("");
+    setPath("");
+    setOutputDir("");
+    setShowModal(false);
   };
 
   const currentRepo = repoList.repos.find((r) => r.name === current);
@@ -75,31 +80,7 @@ export default function RepoBar({ repoList, current, onOpen, onCreate }: Props) 
           </option>
         ))}
       </select>
-      <button onClick={() => setShowNew((v) => !v)}>+ 新建仓库</button>
-      {showNew && (
-        <span className="newrepo">
-          <input
-            placeholder="仓库名（如 企业A资料库）"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <select value={ns} onChange={(e) => setNs(e.target.value)}>
-            <option value="b">企业自有</option>
-            <option value="hq">总部共享库</option>
-          </select>
-          <span className="path-picker">
-            <input
-              className="path-input"
-              placeholder="磁盘路径（留空=默认位置）"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              title="指定仓库在磁盘上的位置，如 D:\资料库\企业A。也可点击右侧按钮浏览选择。"
-            />
-            <button onClick={browse} title="浏览选择文件夹">📁 浏览</button>
-          </span>
-          <button onClick={submit}>创建</button>
-        </span>
-      )}
+      <button onClick={() => setShowModal(true)}>+ 新建仓库</button>
       {currentRepo && (
         <span className="cur-ent" title={currentRepo.disk_path || ""}>
           {currentRepo.enterprise_id}
@@ -107,6 +88,69 @@ export default function RepoBar({ repoList, current, onOpen, onCreate }: Props) 
             <span className="disk-path"> | {currentRepo.disk_path}</span>
           )}
         </span>
+      )}
+
+      {/* 新建仓库弹窗 */}
+      {showModal && (
+        <div className="modal-overlay" onClick={cancel}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">新建仓库</div>
+            <div className="modal-row">
+              <label className="modal-label">仓库名称</label>
+              <input
+                className="modal-input"
+                placeholder="如：企业A资料库"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="modal-row">
+              <label className="modal-label">命名空间</label>
+              <select
+                className="modal-select"
+                value={ns}
+                onChange={(e) => setNs(e.target.value)}
+              >
+                <option value="b">企业自有</option>
+                <option value="hq">总部共享库</option>
+              </select>
+            </div>
+            <div className="modal-row">
+              <label className="modal-label">仓库位置</label>
+              <div className="path-picker">
+                <input
+                  className="modal-input path-input"
+                  placeholder="留空=默认位置"
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  title="指定仓库在磁盘上的位置，如 D:\资料库\企业A"
+                />
+                <button onClick={() => browse(setPath)} title="浏览选择文件夹">📁</button>
+              </div>
+            </div>
+            <div className="modal-row">
+              <label className="modal-label">输出位置</label>
+              <div className="path-picker">
+                <input
+                  className="modal-input path-input"
+                  placeholder="留空=仓库内 .dataproc/bundle"
+                  value={outputDir}
+                  onChange={(e) => setOutputDir(e.target.value)}
+                  title="指定 bundle 产物的输出目录。每个仓库可独立配置。"
+                />
+                <button onClick={() => browse(setOutputDir)} title="浏览选择文件夹">📁</button>
+              </div>
+            </div>
+            <div className="modal-hint">
+              每个仓库拥有独立的输出目录，互不干扰。
+            </div>
+            <div className="modal-actions">
+              <button className="modal-btn modal-cancel" onClick={cancel}>取消</button>
+              <button className="modal-btn modal-ok" onClick={submit} disabled={!name.trim()}>创建</button>
+            </div>
+          </div>
+        </div>
       )}
     </header>
   );
