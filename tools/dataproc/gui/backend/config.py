@@ -1,8 +1,7 @@
-"""GUI 后端配置（仓库根目录）。测试时可直接覆盖 REPOS_BASE。"""
-import os
+"""GUI 后端配置（仓库根目录）。
 
-_HERE = os.path.dirname(os.path.abspath(__file__))          # .../gui/backend
-_GUI = os.path.dirname(_HERE)                               # .../gui
-
-# 默认仓库根：<tools>/dataproc/gui/repos（运行时可用环境变量覆盖）
-REPOS_BASE = os.environ.get("DATAPROC_REPOS_BASE") or os.path.join(_GUI, "repos")
+REPOS_BASE 现在是动态的（从 settings.json 读取），
+通过 repos.get_repos_base() 获取实际路径。
+此模块保留 REPOS_BASE 供向后兼容，但实际值通过 proxy 动态获取。
+"""
+from .repos import get_repos_base, REPOS_BASE  # noqa: F401

@@ -56,7 +56,7 @@ def seed_repo(repo_dir):
 def main():
     fails = []
     tmp = tempfile.mkdtemp(prefix="dataproc_gui_")
-    repos.REPOS_BASE = tmp
+    repos._override_base = tmp
     client = TestClient(app)
     try:
         # G1 仓库
@@ -134,6 +134,7 @@ def main():
         if pr2.get("skipped") != 4:
             fails.append(f"G4: 二次 skipped 应为4，实际 {pr2.get('skipped')}")
     finally:
+        repos._override_base = ""
         shutil.rmtree(tmp, ignore_errors=True)
 
     for name in ("G1", "G2", "G3", "G4", "G5"):

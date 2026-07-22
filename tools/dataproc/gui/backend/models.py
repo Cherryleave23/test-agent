@@ -20,3 +20,4 @@ class SettingsUpdate(BaseModel):
     ocr_enabled: Optional[bool] = None
     run_real_ocr: Optional[bool] = None
     output_dir: Optional[str] = None
+    repos_base: Optional[str] = None  # 仓库根目录

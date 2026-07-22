@@ -21,6 +21,7 @@ interface Settings {
   ocr_enabled: boolean;
   run_real_ocr: boolean;
   output_dir: string;
+  repos_base: string;
 }
 
 export default function App() {
@@ -38,6 +39,7 @@ export default function App() {
     ocr_enabled: false,
     run_real_ocr: false,
     output_dir: "",
+    repos_base: "",
   });
 
   const processedPaths = new Set(
@@ -137,6 +139,17 @@ export default function App() {
       await loadTree(current, currentFolder);
     } catch (e: any) {
       setMsg("创建文件夹失败：" + e.message);
+    }
+  };
+
+  const onRmdir = async (folderPath: string) => {
+    if (!current) return;
+    try {
+      await api.rmdir(current, folderPath);
+      setMsg(`文件夹已删除`);
+      await loadTree(current, currentFolder);
+    } catch (e: any) {
+      setMsg("删除文件夹失败：" + e.message);
     }
   };
 
@@ -242,6 +255,7 @@ export default function App() {
           onToggleFolder={toggleFolder}
           onSelectAll={selectAllInCurrent}
           onMkdir={onMkdir}
+          onRmdir={onRmdir}
         />
         <section className="center">
           <DropZone

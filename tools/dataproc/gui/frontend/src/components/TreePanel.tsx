@@ -18,6 +18,7 @@ interface Props {
   onToggleFolder: (path: string) => void;
   onSelectAll: () => void;
   onMkdir: (parentPath: string, folderName: string) => void;
+  onRmdir: (folderPath: string) => void;
 }
 
 function breadcrumb(path: string): { name: string; path: string }[] {
@@ -42,6 +43,7 @@ export default function TreePanel({
   onToggleFolder,
   onSelectAll,
   onMkdir,
+  onRmdir,
 }: Props) {
   const [showMkdir, setShowMkdir] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -100,6 +102,18 @@ export default function TreePanel({
             />
             <span className="ficon">📁</span>
             <a onClick={() => onNavigate(f.path)}>{f.name}</a>
+            <button
+              className="folder-del-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (confirm(`确认删除文件夹「${f.name}」及其所有内容？`)) {
+                  onRmdir(f.path);
+                }
+              }}
+              title="删除文件夹"
+            >
+              ✕
+            </button>
           </li>
         ))}
         {!tree.folders.length && <li className="empty">（无子文件夹）</li>}

@@ -1,10 +1,18 @@
 """FastAPI 后端：GUI 工作台 REST 接口。复用 dataproc 引擎，零 import src.*。
 
-新增端点：
+端点：
+  - GET/POST /repos: 列举/创建仓库（支持自定义路径、已有目录初始化）
+  - POST /repos/switch: 切换当前仓库
+  - GET /tree: 树状列举
   - POST /tree/mkdir: 新建子文件夹
-  - POST /process: 支持 force（强制重处理）和 out_dir（自定义输出）
+  - DELETE /tree/rmdir: 删除子文件夹
+  - POST /upload: 拖拽上传文件
+  - POST /process: 处理（支持 force 强制重处理、out_dir 自定义输出）
+  - GET /processed: 已处理标记列表
   - POST /markers/clear: 清除处理标记
-  - GET/POST /settings: 读取/更新设置（OCR、输出目录等）
+  - GET /bundle: 获取最新 bundle manifest
+  - GET/POST /settings: 读取/更新设置（OCR、输出目录、仓库根目录）
+  - GET /repos/base: 获取当前仓库根目录
 """
 import json
 import os
@@ -15,32 +23,30 @@ from fastapi.responses import JSONResponse, FileResponse
 from . import repos, tree, upload, markers, process as proc
 from .models import RepoCreate, SettingsUpdate
 
-app = FastAPI(title="dataproc GUI backend", version="0.2.0")
+app = FastAPI(title="dataproc GUI backend", version="0.3.0")
 
-# 本地 Web 模式：构建后的前端 dist 存在时，由后端同源托管（见文件末尾 spa_fallback 兜底路由）。
 _DIST = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # .../gui
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "frontend", "dist",
 )
 
-# 设置文件路径（REPOS_BASE 下）
-_SETTINGS_FILE = os.path.join(repos.REPOS_BASE, "settings.json")
+
+def _load_gui_settings() -> dict:
+    """加载 GUI 设置（repos_base 等全局设置，存在默认 settings.json 中）。"""
+    sp = os.path.join(repos._DEFAULT_BASE, repos.SETTINGS_FILE)
+    if os.path.isfile(sp):
+        try:
+            with open(sp, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 
-def _load_settings() -> dict:
-    if os.path.isfile(_SETTINGS_FILE):
-        with open(_SETTINGS_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    return {
-        "ocr_enabled": False,
-        "run_real_ocr": False,
-        "output_dir": "",
-    }
-
-
-def _save_settings(data: dict) -> None:
-    os.makedirs(os.path.dirname(_SETTINGS_FILE), exist_ok=True)
-    with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
+def _save_gui_settings(data: dict) -> None:
+    os.makedirs(repos._DEFAULT_BASE, exist_ok=True)
+    sp = os.path.join(repos._DEFAULT_BASE, repos.SETTINGS_FILE)
+    with open(sp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
@@ -63,11 +69,17 @@ def create_repo(body: RepoCreate):
 @app.post("/repos/switch")
 def switch_repo(name: str = Form(...)):
     try:
-        repos.get_repo(name)  # 校验存在
+        repos.get_repo(name)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    repos._set_current(repos.REPOS_BASE, name)
+    repos._set_current(repos.get_repos_base(), name)
     return {"current": name}
+
+
+@app.get("/repos/base")
+def get_repos_base():
+    """返回当前仓库根目录的实际磁盘路径。"""
+    return {"repos_base": repos.get_repos_base()}
 
 
 @app.get("/tree")
@@ -82,6 +94,16 @@ def get_tree(name: str, path: str = ""):
 def make_dir(name: str = Form(...), parent_path: str = Form(""), folder_name: str = Form(...)):
     try:
         return tree.mkdir(name, parent_path, folder_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/tree/rmdir")
+def remove_dir(name: str = Form(...), folder_path: str = Form(...)):
+    try:
+        return tree.rmdir(name, folder_path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
@@ -136,24 +158,37 @@ def get_bundle(name: str):
 
 @app.get("/settings")
 def get_settings():
-    return _load_settings()
+    s = _load_gui_settings()
+    return {
+        "ocr_enabled": s.get("ocr_enabled", False),
+        "run_real_ocr": s.get("run_real_ocr", False),
+        "output_dir": s.get("output_dir", ""),
+        "repos_base": repos.get_repos_base(),
+    }
 
 
 @app.post("/settings")
 def update_settings(body: SettingsUpdate):
-    cur = _load_settings()
+    cur = _load_gui_settings()
     if body.ocr_enabled is not None:
         cur["ocr_enabled"] = body.ocr_enabled
     if body.run_real_ocr is not None:
         cur["run_real_ocr"] = body.run_real_ocr
     if body.output_dir is not None:
         cur["output_dir"] = body.output_dir
-    _save_settings(cur)
-    return cur
+    if body.repos_base is not None:
+        repos.set_repos_base(body.repos_base)
+        cur["repos_base"] = body.repos_base
+    _save_gui_settings(cur)
+    return {
+        "ocr_enabled": cur.get("ocr_enabled", False),
+        "run_real_ocr": cur.get("run_real_ocr", False),
+        "output_dir": cur.get("output_dir", ""),
+        "repos_base": repos.get_repos_base(),
+    }
 
 
-# SPA 兜底路由（必须最后注册）：API 路由已先注册并优先匹配，未命中才回退到
-# 静态资源 / SPA index.html。仅本地 Web 模式（dist 存在）启用。
+# SPA 兜底路由
 if os.path.isdir(_DIST):
 
     @app.get("/{full_path:path}")

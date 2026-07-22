@@ -5,6 +5,7 @@ interface Settings {
   ocr_enabled: boolean;
   run_real_ocr: boolean;
   output_dir: string;
+  repos_base: string;
 }
 
 interface Props {
@@ -13,10 +14,12 @@ interface Props {
 
 export default function SettingsPanel({ onSettingsChange }: Props) {
   const [open, setOpen] = useState(false);
+  const [showOcrGuide, setShowOcrGuide] = useState(false);
   const [settings, setSettings] = useState<Settings>({
     ocr_enabled: false,
     run_real_ocr: false,
     output_dir: "",
+    repos_base: "",
   });
   const [saving, setSaving] = useState(false);
 
@@ -49,6 +52,36 @@ export default function SettingsPanel({ onSettingsChange }: Props) {
       </button>
       {open && (
         <div className="settings-dropdown">
+          {/* 仓库根目录 */}
+          <div className="settings-row">
+            <label>仓库默认存储位置</label>
+            <input
+              className="settings-input"
+              placeholder="如 D:\资料库（留空=程序默认位置）"
+              value={settings.repos_base}
+              onChange={(e) => setSettings({ ...settings, repos_base: e.target.value })}
+              onBlur={() => update({ repos_base: settings.repos_base })}
+              title="新建仓库（不指定路径时）的默认存储位置。修改后需要刷新页面生效。"
+            />
+            <p className="settings-hint">未指定磁盘路径的新仓库会创建在此目录下</p>
+          </div>
+
+          {/* Bundle 输出目录 */}
+          <div className="settings-row">
+            <label>Bundle 输出目录</label>
+            <input
+              className="settings-input"
+              placeholder="留空=仓库默认 (.dataproc/bundle)"
+              value={settings.output_dir}
+              onChange={(e) => setSettings({ ...settings, output_dir: e.target.value })}
+              onBlur={() => update({ output_dir: settings.output_dir })}
+            />
+            <p className="settings-hint">处理后 bundle 的输出位置</p>
+          </div>
+
+          <div className="settings-divider" />
+
+          {/* OCR 设置 */}
           <div className="settings-row">
             <label>
               <input
@@ -71,18 +104,47 @@ export default function SettingsPanel({ onSettingsChange }: Props) {
               运行真实 OCR（需安装 PaddleOCR）
             </label>
             <p className="settings-hint">关闭则仅标记 ocr_pending，不实际识别</p>
+            <button
+              className="ocr-guide-btn"
+              onClick={() => setShowOcrGuide((v) => !v)}
+            >
+              {showOcrGuide ? "收起" : "查看"}安装引导
+            </button>
           </div>
-          <div className="settings-row">
-            <label>Bundle 输出目录</label>
-            <input
-              className="settings-input"
-              placeholder="留空=仓库默认 (.dataproc/bundle)"
-              value={settings.output_dir}
-              onChange={(e) => update({ output_dir: e.target.value })}
-              onBlur={() => update({ output_dir: settings.output_dir })}
-            />
-            <p className="settings-hint">处理后 bundle 的输出位置</p>
-          </div>
+          {showOcrGuide && (
+            <div className="ocr-guide">
+              <div className="ocr-guide-title">PaddleOCR 安装引导</div>
+              <ol>
+                <li>
+                  <strong>安装 PaddlePaddle（CPU 版）</strong>
+                  <pre>pip install paddlepaddle==2.6.1</pre>
+                  <p className="settings-hint">GPU 版请参考 PaddlePaddle 官方文档</p>
+                </li>
+                <li>
+                  <strong>安装 PaddleOCR</strong>
+                  <pre>pip install paddleocr</pre>
+                </li>
+                <li>
+                  <strong>安装依赖（PP-Structure 表格识别）</strong>
+                  <pre>pip install pymupdf Pillow</pre>
+                </li>
+                <li>
+                  <strong>验证安装</strong>
+                  <pre>python -c "from paddleocr import PaddleOCR; print('OK')"</pre>
+                  <p className="settings-hint">首次运行会自动下载模型（约 200MB），请确保网络畅通</p>
+                </li>
+                <li>
+                  <strong>启用 OCR</strong>
+                  <p className="settings-hint">勾选上方「启用 OCR」和「运行真实 OCR」，然后处理图片或 PDF 文件即可</p>
+                </li>
+              </ol>
+              <div className="ocr-guide-note">
+                注意：OCR 处理需要较高 CPU 资源，大文件可能耗时较长。
+                如遇到内存不足，请逐个处理文件而非全量处理。
+              </div>
+            </div>
+          )}
+
           {saving && <p className="settings-saving">保存中…</p>}
         </div>
       )}

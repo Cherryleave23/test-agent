@@ -40,6 +40,12 @@ export const api = {
     fd.append("folder_name", folderName);
     return req("POST", "/tree/mkdir", fd, true);
   },
+  rmdir: (name: string, folderPath: string) => {
+    const fd = new FormData();
+    fd.append("name", name);
+    fd.append("folder_path", folderPath);
+    return req("DELETE", "/tree/rmdir", fd, true);
+  },
   upload: (name: string, folder: string, file: File) => {
     const fd = new FormData();
     fd.append("name", name);
@@ -66,4 +72,5 @@ export const api = {
     req("GET", `/bundle?name=${encodeURIComponent(name)}`),
   getSettings: () => req("GET", "/settings"),
   updateSettings: (data: any) => req("POST", "/settings", data),
+  getReposBase: () => req("GET", "/repos/base"),
 };

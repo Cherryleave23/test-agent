@@ -53,3 +53,32 @@ def mkdir(name: str, parent_path: str, folder_name: str, base: str = None) -> di
     os.makedirs(dest, exist_ok=True)
     rel = os.path.relpath(dest, repo_dir).replace(os.sep, "/")
     return {"path": rel}
+
+
+def rmdir(name: str, folder_path: str, base: str = None) -> dict:
+    """删除文件夹（仅允许空文件夹或用户确认的非空文件夹）。
+
+    Args:
+        name: 仓库名
+        folder_path: 要删除的文件夹相对路径
+    Returns:
+        {"path": rel_path, "deleted": True}
+    """
+    import shutil
+    repo_dir, _meta = get_repo(name, base)
+    target = os.path.normpath(os.path.join(repo_dir, folder_path))
+    if not (target.startswith(repo_dir + os.sep) or target == repo_dir):
+        raise ValueError("非法路径（越界）")
+    if target == repo_dir:
+        raise ValueError("不能删除仓库根目录")
+    if not os.path.isdir(target):
+        raise FileNotFoundError("文件夹不存在")
+
+    # 检查是否是三大总文件夹
+    top_name = folder_path.split("/")[0] if "/" in folder_path else folder_path
+    if top_name in TOP_FOLDERS and "/" not in folder_path:
+        raise ValueError("不能删除三大总文件夹（产品资料/知识类文章/原料资料）")
+
+    shutil.rmtree(target)
+    rel = os.path.relpath(target, repo_dir).replace(os.sep, "/")
+    return {"path": rel, "deleted": True}
