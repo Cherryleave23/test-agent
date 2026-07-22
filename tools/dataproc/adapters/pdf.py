@@ -1,4 +1,4 @@
-"""PDF 适配器：数字直抽 + 扫描件 PaddleOCR 3.x。零 src.*。"""
+"""PDF 适配器：数字直抽 + 扫描件 PaddleOCR 3.x + tbpu 排版解析。零 src.*。"""
 from __future__ import annotations
 
 import logging
@@ -6,6 +6,7 @@ import os
 
 from . import MIN_DIGITAL_TEXT, OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
 from ._paddle_ocr import get_paddle_ocr
+from .tbpu import process_ocr_lines
 
 logger = logging.getLogger(__name__)
 
@@ -68,21 +69,14 @@ def _ocr_images(images, run_real_ocr: bool):
                 results = ocr.ocr(arr, cls=True)
             except TypeError:
                 results = ocr.ocr(arr)
-        page_lines: list = []
-        if results:
-            lines = _extract_lines(results)
-            for line in lines:
-                try:
-                    box, (txt, score) = line
-                except (ValueError, TypeError):
-                    logger.warning("跳过无法解析的 OCR 行: %r", line)
-                    continue
-                if score < 0.5:
-                    low_conf = True
-                page_lines.append(txt)
-        if not page_lines:
+        # 提取行并用 tbpu 排版解析
+        lines = _extract_lines(results)
+        if lines:
+            page_text, lc = process_ocr_lines(lines, "multi_para")
+            texts.append(page_text)
+            low_conf = low_conf or lc
+        else:
             low_conf = True
-        texts.append("\n".join(page_lines))
     text = "\n".join(texts).strip()
     return text, low_conf
 

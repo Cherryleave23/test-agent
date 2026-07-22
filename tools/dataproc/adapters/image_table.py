@@ -1,8 +1,11 @@
-"""图片/规格表/电商长图适配器：PaddleOCR 3.x + 阅读顺序 + 长图切片。
+"""图片/规格表/电商长图适配器：PaddleOCR 3.x + tbpu 排版解析 + 长图切片。
 
 PP-OCRv6 优化（不做 1600px 预缩放，否则精度暴跌）：
   - 正常图片：传文件路径给 predict()，PaddleOCR 3.x 内置 max_side_limit=4000 自动缩放
   - 长图（高>3×宽）：按原始分辨率切片（每片 1200px），传 numpy 给 predict()
+
+排版解析：使用 Umi-OCR 的 tbpu 模块（GapTree 间隙树 + ParagraphParse 段落分析），
+自动识别多栏布局并按人类阅读顺序排序，替代原来的简单 (min_y, min_x) 排序。
 
 零 src.*。无文字/低置信标 low_conf，绝不编造。"""
 from __future__ import annotations
@@ -13,6 +16,7 @@ import numpy as np
 
 from . import OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
 from ._paddle_ocr import get_paddle_ocr
+from .tbpu import process_ocr_lines
 
 logger = logging.getLogger(__name__)
 
@@ -38,19 +42,6 @@ def _slice_long_rgb(arr: np.ndarray):
         yield arr[h - SLICE_H:h]
 
 
-def _reading_order(lines):
-    """按阅读顺序排序：(min_y, min_x)。"""
-    def key(ln):
-        box = ln[0]
-        try:
-            ys = [float(p[1]) for p in box]
-            xs = [float(p[0]) for p in box]
-        except (TypeError, IndexError, ValueError):
-            return (0, 0)
-        return (min(ys), min(xs))
-    return sorted(lines, key=key)
-
-
 def _ocr_predict(ocr, input_data):
     """调用 PaddleOCR predict()，兼容文件路径和 numpy 数组输入。
 
@@ -66,32 +57,13 @@ def _ocr_predict(ocr, input_data):
             return ocr.ocr(input_data)
 
 
-def _extract_text_from_results(results):
-    """从 OCR 结果中提取文本行，返回 (text, low_conf)。"""
-    texts: list = []
-    low_conf = False
-    if results:
-        lines = _extract_lines(results)
-        for line in _reading_order(lines):
-            try:
-                box, (txt, score) = line
-            except (ValueError, TypeError):
-                logger.warning("跳过无法解析的 OCR 行: %r", line)
-                continue
-            if score < 0.5:
-                low_conf = True
-            texts.append(txt)
-    text = "\n".join(texts).strip()
-    if not text:
-        low_conf = True
-    return text, low_conf
-
-
 def _extract_lines(res):
     """从 PaddleOCR 结果中提取行列表（兼容 2.x 和 3.x 格式）。
 
     3.x: res = [OCRResult(dict子类)], OCRResult 有 rec_texts/rec_scores/dt_polys
     2.x: res = [[[box, (txt, score)], ...]]
+
+    返回: [(box, (text, score)), ...]
     """
     if not res:
         return []
@@ -118,11 +90,29 @@ def _extract_lines(res):
     return []
 
 
+def _extract_text_with_tbpu(results, parser_key="multi_para"):
+    """从 OCR 结果中提取文本，使用 tbpu 排版解析。
+
+    1. 提取 (box, (text, score)) 行列表
+    2. 交给 tbpu process_ocr_lines 进行多栏排序 + 段落分析
+    3. 返回 (text, low_conf)
+    """
+    if not results:
+        return "", True
+
+    lines = _extract_lines(results)
+    if not lines:
+        return "", True
+
+    return process_ocr_lines(lines, parser_key)
+
+
 class ImageTableAdapter:
     """图片/规格表/长图适配器。
 
     正常图片传文件路径给 PaddleOCR（内置 4000px 自动缩放，不做预缩放）；
     长图按原始分辨率切片后逐片 OCR。
+    OCR 结果统一走 tbpu 排版解析（多栏-自然段策略）。
     """
     kind = "image_table"
 
@@ -153,7 +143,7 @@ class ImageTableAdapter:
                 low_conf = False
                 for chunk in _slice_long_rgb(arr):
                     results = _ocr_predict(ocr, chunk)
-                    t, lc = _extract_text_from_results(results)
+                    t, lc = _extract_text_with_tbpu(results)
                     if t:
                         text_parts.append(t)
                     low_conf = low_conf or lc
@@ -163,7 +153,7 @@ class ImageTableAdapter:
             else:
                 # 正常图片：传文件路径，PaddleOCR 3.x 内置 max_side_limit=4000 自动缩放
                 results = _ocr_predict(ocr, path)
-                text, low_conf = _extract_text_from_results(results)
+                text, low_conf = _extract_text_with_tbpu(results)
 
         except (OCRDeferred, OCRDependencyMissing):
             raise
