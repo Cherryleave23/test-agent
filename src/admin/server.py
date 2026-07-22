@@ -46,9 +46,13 @@ from kb.store import KnowledgeStore
 from baby.store import BabyProfileStore
 from ingest.importer import scan_and_load
 from admin.models import (
-    init_admin_db, LLMConfigUpdate, StoreCreate, EmployeeCreate, GatewayBinding,
+    init_admin_db, LLMConfigUpdate, StoreCreate, EmployeeCreate, BatchDeleteEmployees, GatewayBinding,
     validate_table, mask_token, ALLOWED_TABLES,
 )
+
+import json as _json
+import urllib.request
+import urllib.error
 from admin.pages import (
     render_dashboard, render_llm_page, render_database_page,
     render_stores_page, render_gateway_page, render_babies_page,
@@ -88,11 +92,56 @@ def _validate_yaml_path(yaml_path: str) -> str:
     return abs_path
 
 
+# ---------- Gateway 生命周期管理 ----------
+class GatewayRunner:
+    """Admin 后台可控制的微信网关运行器。"""
+
+    def __init__(self, cfg: EnterpriseConfig):
+        self.cfg = cfg
+        self._task: Optional[asyncio.Task] = None
+        self._running = False
+
+    async def start(self):
+        if self._running:
+            return {"status": "already_running"}
+        import app as _app_mod
+        try:
+            _store, _session, _agent, client, gateway = _app_mod.build_instance(self.cfg)
+        except Exception as e:
+            logger.error("Gateway 启动失败: %s", e)
+            return {"status": "error", "error": str(e)}
+        self._task = asyncio.create_task(self._loop(gateway))
+        self._running = True
+        logger.info("Gateway 已启动")
+        return {"status": "started"}
+
+    async def _loop(self, gateway):
+        await gateway.run_forever()
+
+    async def stop(self):
+        if not self._running or self._task is None:
+            return {"status": "not_running"}
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        self._running = False
+        self._task = None
+        logger.info("Gateway 已停止")
+        return {"status": "stopped"}
+
+    def status(self):
+        return {"running": self._running}
+
+
 # ---------- FastAPI App ----------
 def create_app(cfg: EnterpriseConfig) -> FastAPI:
-    app = FastAPI(title="母婴 Agent 管理后台", version="0.3.0")
+    app = FastAPI(title="母婴 Agent 管理后台", version="0.4.0")
     admin_db = cfg.db_path
     init_admin_db(admin_db)
+
+    _runner = GatewayRunner(cfg)
 
     _store_holder: dict = {"store": None}
     _store_lock = threading.Lock()
@@ -173,6 +222,30 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
             _yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
         logger.info("LLM 配置已更新: %s", abs_path)
         return {"status": "ok", "message": "LLM 配置已写入，需重启 agent 生效", "yaml_path": abs_path}
+
+    @app.get("/api/llm/models", dependencies=[Depends(_verify_token)])
+    def get_llm_models(api_key: str = "", base_url: str = ""):
+        """拉取 DeepSeek / OpenAI 兼容 API 的模型列表。"""
+        key = api_key or cfg.llm.api_key or ""
+        url = base_url or cfg.llm.base_url or "https://api.deepseek.com/v1"
+        if not key:
+            return {"models": [], "error": "缺少 API Key"}
+        try:
+            req = urllib.request.Request(
+                f"{url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+                models = [m.get("id", "") for m in data.get("data", []) if m.get("id")]
+                return {"models": models}
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")
+            logger.warning("拉取模型列表失败: %s %s", e.code, body)
+            return {"models": [], "error": f"API 返回 {e.code}: {body[:200]}"}
+        except Exception as e:
+            logger.warning("拉取模型列表失败: %s", e)
+            return {"models": [], "error": str(e)}
 
     # ===== API: 数据库加载 =====
     @app.get("/api/database/status", dependencies=[Depends(_verify_token)])
@@ -265,30 +338,54 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/api/employees", dependencies=[Depends(_verify_token)])
-    def list_employees():
-        # P0-01: 强制使用当前实例的企业 ID，不接受外部传入
+    def list_employees(
+        store_id: Optional[str] = None,
+        bound: Optional[str] = None,
+        search: Optional[str] = None,
+    ):
+        """员工列表（支持门店筛选、绑定状态筛选、名字模糊搜索）。"""
         ent = cfg.enterprise_id
+        where = ["enterprise_id=?"]
+        params: list = [ent]
+        if store_id:
+            where.append("store_id=?")
+            params.append(store_id)
+        if bound == "yes":
+            where.append("bot_token IS NOT NULL")
+        elif bound == "no":
+            where.append("bot_token IS NULL")
+        sql = (
+            "SELECT id, enterprise_id, store_id, employee_id, employee_name, "
+            "wechat_name, bot_token, bound_at "
+            f"FROM admin_employees WHERE {' AND '.join(where)}"
+        )
         with db_tx(admin_db) as conn:
-            rows = conn.execute(
-                "SELECT id, enterprise_id, employee_id, employee_name, wechat_name, bot_token, bound_at "
-                "FROM admin_employees WHERE enterprise_id=?",
-                (ent,),
-            ).fetchall()
-        return [{
-            "id": r["id"], "enterprise_id": r["enterprise_id"],
-            "employee_id": r["employee_id"], "employee_name": r["employee_name"],
-            "wechat_name": r["wechat_name"], "bot_token": mask_token(r["bot_token"] or ""),
-            "bound_at": r["bound_at"],
-        } for r in rows]
+            rows = conn.execute(sql, params).fetchall()
+        out = []
+        for r in rows:
+            if search and search.strip():
+                s = search.strip().lower()
+                if s not in r["employee_name"].lower() and s not in r["employee_id"].lower():
+                    continue
+            out.append({
+                "id": r["id"], "enterprise_id": r["enterprise_id"],
+                "store_id": r["store_id"],
+                "employee_id": r["employee_id"], "employee_name": r["employee_name"],
+                "wechat_name": r["wechat_name"],
+                "bound": r["bot_token"] is not None and r["bot_token"] != "",
+                "bot_token": mask_token(r["bot_token"] or ""),
+                "bound_at": r["bound_at"],
+            })
+        return out
 
     @app.post("/api/employees", dependencies=[Depends(_verify_token)])
     def create_employee(emp: EmployeeCreate):
-        # P2-R4-4: 强制使用当前实例的企业 ID，忽略请求体中的 enterprise_id
+        """创建员工（强制使用当前企业 ID，支持归属门店）。"""
         with db_tx(admin_db) as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO admin_employees(enterprise_id, employee_id, employee_name) "
-                "VALUES(?,?,?)",
-                (cfg.enterprise_id, emp.employee_id, emp.employee_name),
+                "INSERT OR IGNORE INTO admin_employees(enterprise_id, store_id, employee_id, employee_name) "
+                "VALUES(?,?,?,?)",
+                (cfg.enterprise_id, emp.store_id or None, emp.employee_id, emp.employee_name),
             )
         return {"status": "ok"}
 
@@ -303,6 +400,19 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
             if cur.rowcount == 0:
                 raise HTTPException(404, "员工不存在或无权操作")
         return {"status": "ok"}
+
+    @app.post("/api/employees/batch-delete", dependencies=[Depends(_verify_token)])
+    def batch_delete_employees(payload: BatchDeleteEmployees):
+        """批量删除员工。"""
+        if not payload.ids:
+            raise HTTPException(400, "ids 不能为空")
+        placeholders = ",".join("?" * len(payload.ids))
+        with db_tx(admin_db) as conn:
+            cur = conn.execute(
+                f"DELETE FROM admin_employees WHERE id IN ({placeholders}) AND enterprise_id=?",
+                (*payload.ids, cfg.enterprise_id),
+            )
+        return {"status": "ok", "deleted": cur.rowcount}
 
     # ===== API: 微信网关绑定 =====
     @app.get("/api/gateway", dependencies=[Depends(_verify_token)])
@@ -354,6 +464,44 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
                 raise HTTPException(404, "网关绑定不存在或无权操作")
         logger.info("网关解绑: emp_id=%s", emp_id)
         return {"status": "ok"}
+
+    # --- 网关生命周期控制 ---
+    @app.post("/api/gateway/start", dependencies=[Depends(_verify_token)])
+    async def gateway_start():
+        return await _runner.start()
+
+    @app.post("/api/gateway/stop", dependencies=[Depends(_verify_token)])
+    async def gateway_stop():
+        return await _runner.stop()
+
+    @app.get("/api/gateway/status", dependencies=[Depends(_verify_token)])
+    def gateway_status():
+        return _runner.status()
+
+    # --- 二维码绑定 ---
+    @app.get("/api/gateway/qrcode", dependencies=[Depends(_verify_token)])
+    async def gateway_qrcode():
+        """获取 iLink 登录二维码 URL。"""
+        from wechat.ilink_client import ILinkClient
+        client = ILinkClient(cfg.wechat)
+        try:
+            qr_url = await client.get_qr_code()
+            return {"qr_url": qr_url}
+        except Exception as e:
+            logger.warning("获取 QR 码失败: %s", e)
+            return {"qr_url": "", "error": str(e)}
+
+    @app.get("/api/gateway/qrcode/status", dependencies=[Depends(_verify_token)])
+    async def gateway_qrcode_status():
+        """轮询 QR 码扫码状态。"""
+        from wechat.ilink_client import ILinkClient
+        client = ILinkClient(cfg.wechat)
+        try:
+            status = await client.get_qr_status()
+            return {"status": status}
+        except Exception as e:
+            logger.warning("获取 QR 状态失败: %s", e)
+            return {"status": "", "error": str(e)}
 
     # ===== API: 宝宝档案查看（受限字段）=====
     @app.get("/api/babies", dependencies=[Depends(_verify_token)])

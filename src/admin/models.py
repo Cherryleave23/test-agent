@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS admin_stores (
 CREATE TABLE IF NOT EXISTS admin_employees (
     id INTEGER PRIMARY KEY,
     enterprise_id TEXT NOT NULL,
+    store_id TEXT,
     employee_id TEXT NOT NULL,
     employee_name TEXT NOT NULL,
     wechat_name TEXT,
@@ -31,9 +32,16 @@ ALLOWED_TABLES = frozenset({"products_milk", "products_nutrition"})
 
 
 def init_admin_db(db_path: str):
-    """初始化 admin 表（幂等）。P2-N1: 使用 db_tx 确保连接关闭。"""
+    """初始化 admin 表（幂等）。P2-N1: 使用 db_tx 确保连接关闭。
+
+    迁移：若 admin_employees 缺少 store_id 列，自动添加。
+    """
     with db_tx(db_path) as conn:
         conn.executescript(ADMIN_SCHEMA)
+        # 迁移：检查并添加 store_id 列
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(admin_employees)").fetchall()]
+        if "store_id" not in cols:
+            conn.execute("ALTER TABLE admin_employees ADD COLUMN store_id TEXT")
 
 
 class LLMConfigUpdate(BaseModel):
@@ -69,8 +77,13 @@ class StoreCreate(BaseModel):
 
 class EmployeeCreate(BaseModel):
     enterprise_id: str = Field(min_length=1)
+    store_id: str = ""
     employee_id: str = Field(min_length=1)
     employee_name: str = Field(min_length=1)
+
+
+class BatchDeleteEmployees(BaseModel):
+    ids: list[int] = Field(min_length=1)
 
 
 class GatewayBinding(BaseModel):

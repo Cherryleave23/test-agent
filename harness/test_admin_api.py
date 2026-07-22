@@ -29,6 +29,7 @@ import time
 import tempfile
 import json
 import shutil
+import asyncio
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +39,7 @@ from fastapi.testclient import TestClient
 from common.config import EnterpriseConfig
 from common.db import connect
 from admin.server import create_app
+from unittest.mock import AsyncMock, MagicMock
 
 
 # 临时目录管理：测试结束后统一清理
@@ -488,6 +490,145 @@ def a25_cross_tenant_list_stores_filtered():
         assert s["enterprise_id"] != "ent_other", "list_stores 不应返回他企门店"
 
 
+def a26_llm_models_no_key():
+    """A26: GET /api/llm/models 无 api_key 返回错误。"""
+    client, _ = _make_client(_tmp_db())
+    r = client.get("/api/llm/models")
+    assert r.status_code == 200
+    data = r.json()
+    assert "models" in data
+    assert data["error"]  # 应返回错误信息
+
+
+def a27_employee_store_filter():
+    """A27: 员工列表支持 store_id 筛选。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    # 创建门店
+    client.post("/api/stores", json={"enterprise_id": "ent_test", "enterprise_name": "门店A", "db_path": "a.db"})
+    # 创建员工（带 store_id）
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, store_id, employee_id, employee_name) VALUES(?,?,?,?)",
+            ("ent_test", "ent_test", "emp_a", "张三"),
+        )
+        conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, store_id, employee_id, employee_name) VALUES(?,?,?,?)",
+            ("ent_test", "", "emp_b", "李四"),
+        )
+        conn.commit()
+    r = client.get("/api/employees?store_id=ent_test")
+    emps = r.json()
+    assert len(emps) == 1
+    assert emps[0]["employee_name"] == "张三"
+
+
+def a28_employee_bound_filter():
+    """A28: 员工列表支持绑定状态筛选。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, employee_id, employee_name, bot_token) VALUES(?,?,?,?)",
+            ("ent_test", "emp_bound", "已绑定", "tok-12345678"),
+        )
+        conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, employee_id, employee_name, bot_token) VALUES(?,?,?,?)",
+            ("ent_test", "emp_unbound", "未绑定", None),
+        )
+        conn.commit()
+    r = client.get("/api/employees?bound=yes")
+    assert len(r.json()) == 1
+    assert r.json()[0]["bound"] is True
+    r2 = client.get("/api/employees?bound=no")
+    assert len(r2.json()) == 1
+    assert r2.json()[0]["bound"] is False
+
+
+def a29_employee_search():
+    """A29: 员工列表支持名字模糊搜索。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, employee_id, employee_name) VALUES(?,?,?)",
+            ("ent_test", "emp001", "张三"),
+        )
+        conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, employee_id, employee_name) VALUES(?,?,?)",
+            ("ent_test", "emp002", "李四"),
+        )
+        conn.commit()
+    r = client.get("/api/employees?search=张三")
+    emps = r.json()
+    assert len(emps) == 1
+    assert emps[0]["employee_name"] == "张三"
+
+
+def a30_batch_delete_employees():
+    """A30: 批量删除员工。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    with connect(db) as conn:
+        cur = conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, employee_id, employee_name) VALUES(?,?,?)",
+            ("ent_test", "emp_a", "员工A"),
+        )
+        id_a = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO admin_employees(enterprise_id, employee_id, employee_name) VALUES(?,?,?)",
+            ("ent_test", "emp_b", "员工B"),
+        )
+        id_b = cur.lastrowid
+        conn.commit()
+    r = client.post("/api/employees/batch-delete", json={"ids": [id_a, id_b]})
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 2
+    r2 = client.get("/api/employees")
+    assert len(r2.json()) == 0
+
+
+def a31_gateway_lifecycle():
+    """A31: 网关生命周期 start/stop/status。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    # 初始状态
+    r = client.get("/api/gateway/status")
+    assert r.status_code == 200
+    assert r.json()["running"] is False
+    # stop 未运行时应返回 not_running
+    r_stop = client.post("/api/gateway/stop")
+    assert r_stop.status_code == 200
+    assert r_stop.json()["status"] == "not_running"
+    # start 错误处理（mock build_instance 抛异常）
+    with patch("app.build_instance") as mock_build:
+        mock_build.side_effect = Exception("mock init error")
+        r_err = client.post("/api/gateway/start")
+        assert r_err.status_code == 200
+        assert r_err.json()["status"] == "error"
+
+
+def a32_qrcode_endpoints():
+    """A32: QR 码端点结构正确。"""
+    client, _ = _make_client(_tmp_db())
+    # qrcode（mock ilink_client）
+    with patch("wechat.ilink_client.ILinkClient") as MockClient:
+        mock_inst = MagicMock()
+        mock_inst.get_qr_code = AsyncMock(return_value="https://example.com/qr.png")
+        MockClient.return_value = mock_inst
+        r = client.get("/api/gateway/qrcode")
+        assert r.status_code == 200
+        assert "qr_url" in r.json()
+    # qrcode status
+    with patch("wechat.ilink_client.ILinkClient") as MockClient:
+        mock_inst = MagicMock()
+        mock_inst.get_qr_status = AsyncMock(return_value="waiting")
+        MockClient.return_value = mock_inst
+        r = client.get("/api/gateway/qrcode/status")
+        assert r.status_code == 200
+        assert r.json()["status"] == "waiting"
+
+
 CHECKS = [
     ("A1 create_app 路由含 5 大板块", a1_app_routes),
     ("A2 GET /api/llm 返回 LLM 配置", a2_get_llm_config),
@@ -514,6 +655,13 @@ CHECKS = [
     ("A23 跨租户解绑网关→404", a23_cross_tenant_unbind_gateway_404),
     ("A24 跨租户查看宝宝详情→403", a24_cross_tenant_baby_detail_403),
     ("A25 跨租户list_stores不暴露他企", a25_cross_tenant_list_stores_filtered),
+    ("A26 GET /api/llm/models 无 api_key 返回错误", a26_llm_models_no_key),
+    ("A27 员工列表 store_id 筛选", a27_employee_store_filter),
+    ("A28 员工列表 bound 筛选", a28_employee_bound_filter),
+    ("A29 员工列表 search 搜索", a29_employee_search),
+    ("A30 批量删除员工", a30_batch_delete_employees),
+    ("A31 网关生命周期 start/stop/status", a31_gateway_lifecycle),
+    ("A32 QR 码端点结构", a32_qrcode_endpoints),
 ]
 
 
