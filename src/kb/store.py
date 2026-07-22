@@ -361,8 +361,12 @@ class KnowledgeStore:
         except Exception:
             return False
 
-    def delete_corpus(self, cid: int) -> None:
-        """删除一条语料。HQ（厂商分发只读）行拒绝删除（F2）。"""
+    def delete_corpus(self, cid: int,
+                      enterprise_id: Optional[str] = None) -> None:
+        """删除一条语料。HQ（厂商分发只读）行拒绝删除（F2）。
+
+        P2-R4-1: 当传入 enterprise_id 时，校验语料归属，防跨租户越权。
+        """
         with db_tx(self.db_path) as conn:
             cur = conn.cursor()
             row = cur.execute(
@@ -374,20 +378,27 @@ class KnowledgeStore:
                 raise ReadonlyError(
                     "HQ 知识库为厂商分发只读，实例不可删除（enterprise_id=hq 或 meta.readonly=true）"
                 )
+            # P2-R4-1: 跨租户校验
+            if enterprise_id is not None and row["enterprise_id"] != enterprise_id:
+                raise PermissionError(
+                    f"跨租户越权: 语料 id={cid} 不属于 enterprise_id={enterprise_id}"
+                )
             cur.execute("DELETE FROM fts_corpus WHERE rowid=?", (cid,))
             cur.execute("DELETE FROM corpus WHERE id=?", (cid,))
-            conn.commit()
         try:
             self.collection.delete(ids=[str(cid)])
-        except Exception:
-            pass  # Chroma 缺该 id 不阻塞
+        except Exception as e:
+            # P2-R4-2: 记录警告而非静默忽略
+            logger.warning("Chroma 向量删除失败 (corpus id=%s): %s: %s", cid, type(e).__name__, e)
 
     def update_corpus(self, cid: int, title: Optional[str] = None,
                       content: Optional[str] = None,
-                      meta: Optional[dict] = None) -> None:
+                      meta: Optional[dict] = None,
+                      enterprise_id: Optional[str] = None) -> None:
         """改写一条语料。HQ（厂商分发只读）行拒绝改写（F2）。
 
         厂商重分发仍走 add_hq_knowledge（vendor 路径），不受本护栏限制。
+        P2-R4-1: 当传入 enterprise_id 时，校验语料归属，防跨租户越权。
         """
         with db_tx(self.db_path) as conn:
             cur = conn.cursor()
@@ -400,6 +411,11 @@ class KnowledgeStore:
             if self._row_readonly(row):
                 raise ReadonlyError(
                     "HQ 知识库为厂商分发只读，实例不可改写（enterprise_id=hq 或 meta.readonly=true）"
+                )
+            # P2-R4-1: 跨租户校验
+            if enterprise_id is not None and row["enterprise_id"] != enterprise_id:
+                raise PermissionError(
+                    f"跨租户越权: 语料 id={cid} 不属于 enterprise_id={enterprise_id}"
                 )
             new_title = title if title is not None else row["title"]
             new_content = content if content is not None else row["content"]

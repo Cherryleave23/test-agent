@@ -128,14 +128,14 @@ def a6_create_store():
     """A6: POST /api/stores 创建门店后 GET 能查到。"""
     client, _ = _make_client(_tmp_db())
     r = client.post("/api/stores", json={
-        "enterprise_id": "ent_new", "enterprise_name": "新门店",
+        "enterprise_id": "ent_test", "enterprise_name": "新门店",
         "db_path": "new_store.db",
     })
     assert r.status_code == 200
     r2 = client.get("/api/stores")
     stores = r2.json()
     assert len(stores) == 1
-    assert stores[0]["enterprise_id"] == "ent_new"
+    assert stores[0]["enterprise_id"] == "ent_test"
     assert stores[0]["enterprise_name"] == "新门店"
 
 
@@ -382,6 +382,33 @@ def a20_cross_tenant_isolation():
         pass  # 正确：拒绝跨租户操作
 
 
+def a21_api_cross_tenant_403():
+    """A21: API 级跨租户拒绝 — confirm/delete 他企商品返回 403。"""
+    db = _tmp_db()
+    client, _ = _make_client(db)
+    # 触发 schema 初始化
+    client.get("/api/database/status")
+    # 插入一条属于 ent_other 的商品
+    with connect(db) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO products_milk(enterprise_id,name,brand,stage,age_range,price,
+               origin,milk_origin,ptype,reg_number,manufacturer,ingredients,nutrition,highlights)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("ent_other", "他企商品", "品牌", "1段", "0-6个月",
+             199, "中国", "新西兰", "牛奶粉", "", "厂商",
+             "生牛乳", "蛋白质", "优质"),
+        )
+        pid = cur.lastrowid
+        conn.commit()
+    # API 调用：当前实例 enterprise_id=ent_test，尝试确认他企商品 → 403
+    r1 = client.post(f"/api/database/confirm?product_id={pid}&value=REG123&table=products_milk")
+    assert r1.status_code == 403, f"跨租户确认应返回 403，实际: {r1.status_code}"
+    # API 调用：尝试删除他企商品 → 403
+    r2 = client.delete(f"/api/database/product?product_id={pid}&table=products_milk")
+    assert r2.status_code == 403, f"跨租户删除应返回 403，实际: {r2.status_code}"
+
+
 CHECKS = [
     ("A1 create_app 路由含 5 大板块", a1_app_routes),
     ("A2 GET /api/llm 返回 LLM 配置", a2_get_llm_config),
@@ -403,6 +430,7 @@ CHECKS = [
     ("A18 POST /api/database/confirm 非法表名返回 400", a18_confirm_bad_table),
     ("A19 Bearer Token 认证（无/正确/错误）", a19_bearer_token_auth),
     ("A20 跨租户隔离（confirm/delete 拒绝越权）", a20_cross_tenant_isolation),
+    ("A21 API 级跨租户拒绝（403）", a21_api_cross_tenant_403),
 ]
 
 

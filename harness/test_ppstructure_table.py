@@ -64,16 +64,30 @@ def t3_html_parser_from_shared():
 def t3b_html_parser_colspan_rowspan():
     """T3b: TableHTMLParser 支持 colspan/rowspan（P2-N5 补充测试）。"""
     from dataproc.adapters._ppstructure import TableHTMLParser
-    html = '''<table>
+
+    # colspan 测试
+    html_colspan = '''<table>
     <tr><td colspan="2">合并表头</td></tr>
     <tr><td>A</td><td>B</td></tr>
     </table>'''
     parser = TableHTMLParser()
-    parser.feed(html)
-    assert len(parser.rows) == 2, f"应解析出 2 行，实际: {len(parser.rows)}"
-    assert len(parser.rows[0]) == 2, f"colspan 行应有 2 列，实际: {len(parser.rows[0])}"
-    assert parser.rows[0][0] == "合并表头", f"colspan 内容应填充，实际: {parser.rows[0]}"
-    assert parser.rows[1] == ["A", "B"], f"第二行不匹配: {parser.rows[1]}"
+    parser.feed(html_colspan)
+    assert len(parser.rows) == 2, f"colspan: 应解析出 2 行，实际: {len(parser.rows)}"
+    assert len(parser.rows[0]) == 2, f"colspan: 行应有 2 列，实际: {len(parser.rows[0])}"
+    assert parser.rows[0][0] == "合并表头", f"colspan: 内容应填充，实际: {parser.rows[0]}"
+    assert parser.rows[1] == ["A", "B"], f"colspan: 第二行不匹配: {parser.rows[1]}"
+
+    # rowspan 测试
+    html_rowspan = '''<table>
+    <tr><td rowspan="2">跨行</td><td>1</td></tr>
+    <tr><td>2</td></tr>
+    </table>'''
+    parser2 = TableHTMLParser()
+    parser2.feed(html_rowspan)
+    assert len(parser2.rows) == 2, f"rowspan: 应解析出 2 行，实际: {len(parser2.rows)}"
+    assert len(parser2.rows[0]) == 2, f"rowspan: 第一行应有 2 列，实际: {len(parser2.rows[0])}"
+    assert parser2.rows[0] == ["跨行", "1"], f"rowspan: 第一行不匹配: {parser2.rows[0]}"
+    assert parser2.rows[1] == ["跨行", "2"], f"rowspan: 第二行应继承跨行值: {parser2.rows[1]}"
 
 
 def t4_classify_ptype():

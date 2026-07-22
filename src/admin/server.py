@@ -244,19 +244,23 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
     # ===== API: 门店创立与员工管理 =====
     @app.get("/api/stores", dependencies=[Depends(_verify_token)])
     def list_stores():
+        # P2-R4-3: 过滤当前企业，不暴露其他门店
         with db_tx(admin_db) as conn:
             rows = conn.execute(
-                "SELECT enterprise_id, enterprise_name, db_path, created_at FROM admin_stores"
+                "SELECT enterprise_id, enterprise_name, db_path, created_at "
+                "FROM admin_stores WHERE enterprise_id=?",
+                (cfg.enterprise_id,),
             ).fetchall()
         return [dict(r) for r in rows]
 
     @app.post("/api/stores", dependencies=[Depends(_verify_token)])
     def create_store(store: StoreCreate):
+        # P2-R4-4: 强制使用当前实例的企业 ID
         with db_tx(admin_db) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO admin_stores(enterprise_id, enterprise_name, db_path, created_at) "
                 "VALUES(?,?,?,?)",
-                (store.enterprise_id, store.enterprise_name, store.db_path, time.time()),
+                (cfg.enterprise_id, store.enterprise_name, store.db_path, time.time()),
             )
         return {"status": "ok"}
 
@@ -279,11 +283,12 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
 
     @app.post("/api/employees", dependencies=[Depends(_verify_token)])
     def create_employee(emp: EmployeeCreate):
+        # P2-R4-4: 强制使用当前实例的企业 ID，忽略请求体中的 enterprise_id
         with db_tx(admin_db) as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO admin_employees(enterprise_id, employee_id, employee_name) "
                 "VALUES(?,?,?)",
-                (emp.enterprise_id, emp.employee_id, emp.employee_name),
+                (cfg.enterprise_id, emp.employee_id, emp.employee_name),
             )
         return {"status": "ok"}
 
@@ -319,17 +324,19 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
 
     @app.post("/api/gateway", dependencies=[Depends(_verify_token)])
     def bind_gateway(binding: GatewayBinding):
+        # P2-R4-4: 强制使用当前实例的企业 ID
+        ent = cfg.enterprise_id
         with db_tx(admin_db) as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO admin_employees(enterprise_id, employee_id, employee_name) "
                 "VALUES(?,?,?)",
-                (binding.enterprise_id, binding.employee_id, binding.wechat_name or ""),
+                (ent, binding.employee_id, binding.wechat_name or ""),
             )
             conn.execute(
                 "UPDATE admin_employees SET wechat_name=?, bot_token=?, bound_at=? "
                 "WHERE enterprise_id=? AND employee_id=?",
                 (binding.wechat_name, binding.bot_token, time.time(),
-                 binding.enterprise_id, binding.employee_id),
+                 ent, binding.employee_id),
             )
         logger.info("网关绑定: employee_id=%s", binding.employee_id)
         return {"status": "ok", "message": f"员工 {binding.employee_id} 的微信网关已绑定"}
