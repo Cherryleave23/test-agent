@@ -24,8 +24,8 @@ async function req(method: string, path: string, body?: any, isForm = false): Pr
 
 export const api = {
   listRepos: () => req("GET", "/repos"),
-  createRepo: (name: string, ns: string) =>
-    req("POST", "/repos", { name, namespace: ns }),
+  createRepo: (name: string, ns: string, path?: string) =>
+    req("POST", "/repos", { name, namespace: ns, path: path || null }),
   switchRepo: (name: string) => {
     const fd = new FormData();
     fd.append("name", name);
@@ -33,6 +33,13 @@ export const api = {
   },
   getTree: (name: string, path = "") =>
     req("GET", `/tree?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`),
+  mkdir: (name: string, parentPath: string, folderName: string) => {
+    const fd = new FormData();
+    fd.append("name", name);
+    fd.append("parent_path", parentPath);
+    fd.append("folder_name", folderName);
+    return req("POST", "/tree/mkdir", fd, true);
+  },
   upload: (name: string, folder: string, file: File) => {
     const fd = new FormData();
     fd.append("name", name);
@@ -42,12 +49,21 @@ export const api = {
   },
   processed: (name: string) =>
     req("GET", `/processed?name=${encodeURIComponent(name)}`),
-  process: (name: string, selection: any) => {
+  clearMarkers: (name: string) => {
+    const fd = new FormData();
+    fd.append("name", name);
+    return req("POST", "/markers/clear", fd, true);
+  },
+  process: (name: string, selection: any, force = false, outDir = "") => {
     const fd = new FormData();
     fd.append("name", name);
     if (selection) fd.append("selection", JSON.stringify(selection));
+    fd.append("force", force ? "true" : "false");
+    fd.append("out_dir", outDir);
     return req("POST", "/process", fd, true);
   },
   bundle: (name: string) =>
     req("GET", `/bundle?name=${encodeURIComponent(name)}`),
+  getSettings: () => req("GET", "/settings"),
+  updateSettings: (data: any) => req("POST", "/settings", data),
 };

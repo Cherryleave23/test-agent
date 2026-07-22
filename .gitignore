@@ -26,3 +26,4 @@ secrets/
 *.chroma/
 chroma.sqlite3
 none/
+node_modules

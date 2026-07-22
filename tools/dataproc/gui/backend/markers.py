@@ -71,3 +71,15 @@ def list_markers(name: str, base: str = None) -> list:
     finally:
         conn.close()
     return [{"path": r[0], "status": r[1], "bundle_ref": r[2]} for r in rows]
+
+
+def clear_markers(name: str, base: str = None) -> int:
+    """清除所有处理标记。返回删除条数。"""
+    repo_dir, _meta = get_repo(name, base)
+    conn = _conn(repo_dir)
+    try:
+        cur = conn.execute("DELETE FROM processed")
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()

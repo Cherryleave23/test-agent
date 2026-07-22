@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 
 interface TreeData {
   path: string;
@@ -17,6 +17,7 @@ interface Props {
   onToggleFile: (path: string) => void;
   onToggleFolder: (path: string) => void;
   onSelectAll: () => void;
+  onMkdir: (parentPath: string, folderName: string) => void;
 }
 
 function breadcrumb(path: string): { name: string; path: string }[] {
@@ -40,19 +41,46 @@ export default function TreePanel({
   onToggleFile,
   onToggleFolder,
   onSelectAll,
+  onMkdir,
 }: Props) {
+  const [showMkdir, setShowMkdir] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+
   if (!tree) return <aside className="tree">（请先选择仓库）</aside>;
 
   const crumbs = [{ name: "仓库根", path: "" }, ...breadcrumb(currentFolder)];
+
+  const submitMkdir = () => {
+    if (!newFolderName.trim()) return;
+    onMkdir(currentFolder, newFolderName.trim());
+    setNewFolderName("");
+    setShowMkdir(false);
+  };
 
   return (
     <aside className="tree">
       <div className="tree-head">
         <span>资料树</span>
-        <button onClick={onSelectAll} disabled={!tree.files.length}>
-          全选当前
-        </button>
+        <div className="tree-actions">
+          <button onClick={() => setShowMkdir((v) => !v)} title="在当前文件夹下新建子文件夹">
+            + 文件夹
+          </button>
+          <button onClick={onSelectAll} disabled={!tree.files.length}>
+            全选当前
+          </button>
+        </div>
       </div>
+      {showMkdir && (
+        <div className="mkdir-bar">
+          <input
+            placeholder="新文件夹名"
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitMkdir()}
+          />
+          <button onClick={submitMkdir}>创建</button>
+        </div>
+      )}
       <nav className="crumbs">
         {crumbs.map((c, i) => (
           <span key={c.path}>

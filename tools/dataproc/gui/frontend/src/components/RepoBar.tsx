@@ -9,18 +9,20 @@ interface Props {
   repoList: { repos: Repo[]; current: string | null };
   current: string;
   onOpen: (name: string) => void;
-  onCreate: (name: string, ns: string) => void;
+  onCreate: (name: string, ns: string, path?: string) => void;
 }
 
 export default function RepoBar({ repoList, current, onOpen, onCreate }: Props) {
   const [showNew, setShowNew] = useState(false);
   const [name, setName] = useState("");
   const [ns, setNs] = useState("b");
+  const [path, setPath] = useState("");
 
   const submit = () => {
     if (!name.trim()) return;
-    onCreate(name.trim(), ns);
+    onCreate(name.trim(), ns, path.trim() || undefined);
     setName("");
+    setPath("");
     setShowNew(false);
   };
 
@@ -52,6 +54,13 @@ export default function RepoBar({ repoList, current, onOpen, onCreate }: Props) 
             <option value="b">企业自有</option>
             <option value="hq">总部共享库</option>
           </select>
+          <input
+            className="path-input"
+            placeholder="磁盘路径（留空=默认位置）"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            title="指定仓库在磁盘上的位置，如 D:\资料库\企业A"
+          />
           <button onClick={submit}>创建</button>
         </span>
       )}

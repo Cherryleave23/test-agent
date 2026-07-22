@@ -5,6 +5,7 @@ import TreePanel from "./components/TreePanel";
 import DropZone from "./components/DropZone";
 import ProcessPanel from "./components/ProcessPanel";
 import ProcessedPanel from "./components/ProcessedPanel";
+import SettingsPanel from "./components/SettingsPanel";
 
 interface RepoList {
   repos: { name: string; enterprise_id: string; namespace: string }[];
@@ -16,6 +17,11 @@ interface TreeData {
   files: { name: string; path: string; size: number }[];
   top_folders: string[];
 }
+interface Settings {
+  ocr_enabled: boolean;
+  run_real_ocr: boolean;
+  output_dir: string;
+}
 
 export default function App() {
   const [repoList, setRepoList] = useState<RepoList>({ repos: [], current: null });
@@ -26,12 +32,17 @@ export default function App() {
   const [selFolders, setSelFolders] = useState<Set<string>>(new Set());
   const [markers, setMarkers] = useState<any[]>([]);
   const [bundle, setBundle] = useState<any>(null);
-  // 已处理文件的相对路径集合（供 TreePanel 显示绿点）
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [settings, setSettings] = useState<Settings>({
+    ocr_enabled: false,
+    run_real_ocr: false,
+    output_dir: "",
+  });
+
   const processedPaths = new Set(
     markers.map((m: any) => m.rel_path || m.path || "").filter(Boolean)
   );
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
 
   const loadRepos = useCallback(async () => {
     const r = await api.listRepos();
@@ -52,9 +63,7 @@ export default function App() {
     try {
       const p = await api.processed(name);
       setMarkers(p.markers || []);
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
     try {
       const b = await api.bundle(name);
       setBundle(b);
@@ -84,10 +93,15 @@ export default function App() {
     await loadRepos();
   };
 
-  const createRepo = async (name: string, ns: string) => {
-    await api.createRepo(name, ns);
-    await loadRepos();
-    await openRepo(name);
+  const createRepo = async (name: string, ns: string, path?: string) => {
+    try {
+      await api.createRepo(name, ns, path);
+      await loadRepos();
+      await openRepo(name);
+      setMsg(`仓库「${name}」已创建`);
+    } catch (e: any) {
+      setMsg("创建仓库失败：" + e.message);
+    }
   };
 
   const navigate = (path: string) => loadTree(current, path);
@@ -115,15 +129,32 @@ export default function App() {
     });
   };
 
+  const onMkdir = async (parentPath: string, folderName: string) => {
+    if (!current) return;
+    try {
+      await api.mkdir(current, parentPath, folderName);
+      setMsg(`文件夹「${folderName}」已创建`);
+      await loadTree(current, currentFolder);
+    } catch (e: any) {
+      setMsg("创建文件夹失败：" + e.message);
+    }
+  };
+
   const onFiles = async (files: File[]) => {
     if (!current) return;
     setBusy(true);
     setMsg("上传中…");
     try {
+      let uploaded = 0;
       for (const f of files) {
-        await api.upload(current, currentFolder, f);
+        // 如果文件名含路径（来自文件夹拖入），保留子目录结构
+        const folder = currentFolder
+          ? currentFolder + (f.name.includes("/") ? "/" + f.name.split("/").slice(0, -1).join("/") : "")
+          : (f.name.includes("/") ? f.name.split("/").slice(0, -1).join("/") : "");
+        await api.upload(current, folder, f);
+        uploaded++;
       }
-      setMsg(`已上传 ${files.length} 个文件到 ${currentFolder || "根目录"}`);
+      setMsg(`已上传 ${uploaded} 个文件到 ${currentFolder || "根目录"}`);
       await loadTree(current, currentFolder);
     } catch (e: any) {
       setMsg("上传失败：" + e.message);
@@ -133,7 +164,6 @@ export default function App() {
   };
 
   const onOsPaths = async (paths: string[]) => {
-    // Tauri OS 拖入：读取文件内容后走同一上传通道
     if (!current) return;
     setBusy(true);
     try {
@@ -153,7 +183,7 @@ export default function App() {
     }
   };
 
-  const doProcess = async (full: boolean) => {
+  const doProcess = async (full: boolean, force: boolean) => {
     if (!current) return;
     const selection = full
       ? null
@@ -161,16 +191,30 @@ export default function App() {
     setBusy(true);
     setMsg(full ? "全量处理中…" : "选择性处理中…");
     try {
-      const sum = await api.process(current, selection);
-      setMsg(
-        `处理完成：${sum.processed_files?.length || 0} 个文件，` +
-          `跳过 ${sum.skipped || 0} 个已处理`
-      );
+      const sum = await api.process(current, selection, force, settings.output_dir || "");
+      const procCount = sum.processed_files?.length || 0;
+      const skipCount = sum.skipped || 0;
+      if (procCount === 0 && skipCount > 0) {
+        setMsg(`全部跳过：${skipCount} 个文件已处理且内容未变。勾选「强制重新处理」可重新处理。`);
+      } else {
+        setMsg(`处理完成：${procCount} 个文件，跳过 ${skipCount} 个已处理`);
+      }
       await loadProcessed(current);
     } catch (e: any) {
       setMsg("处理失败：" + e.message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onClearMarkers = async () => {
+    if (!current) return;
+    try {
+      const r = await api.clearMarkers(current);
+      setMsg(`已清除 ${r.cleared} 条处理标记`);
+      setMarkers([]);
+    } catch (e: any) {
+      setMsg("清除标记失败：" + e.message);
     }
   };
 
@@ -182,7 +226,10 @@ export default function App() {
         onOpen={openRepo}
         onCreate={createRepo}
       />
-      <div className="msg">{msg}</div>
+      <div className="msg-bar">
+        <span className="msg">{msg}</span>
+        <SettingsPanel onSettingsChange={setSettings} />
+      </div>
       <div className="main">
         <TreePanel
           tree={tree}
@@ -194,6 +241,7 @@ export default function App() {
           onToggleFile={toggleFile}
           onToggleFolder={toggleFolder}
           onSelectAll={selectAllInCurrent}
+          onMkdir={onMkdir}
         />
         <section className="center">
           <DropZone
@@ -206,7 +254,9 @@ export default function App() {
           <ProcessPanel
             busy={busy}
             hasSelection={selFiles.size > 0 || selFolders.size > 0}
+            outputDir={settings.output_dir}
             onProcess={doProcess}
+            onClearMarkers={onClearMarkers}
           />
         </section>
         <ProcessedPanel markers={markers} bundle={bundle} />

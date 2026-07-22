@@ -130,3 +130,60 @@ ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
 }
 .proc-tree-file:hover { background: var(--panel2); }
 .proc-dot { color: var(--accent2); font-size: 11px; margin-left: auto; }
+
+/* 新建仓库路径输入 */
+.path-input { width: 180px; }
+
+/* 消息栏 + 设置按钮 */
+.msg-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 16px; background: #12161b;
+}
+.msg-bar .msg { padding: 0; }
+
+/* 设置面板 */
+.settings-panel { position: relative; }
+.settings-btn {
+  background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 8px; padding: 4px 10px; font-size: 13px; cursor: pointer;
+}
+.settings-btn:hover { border-color: var(--accent); color: var(--text); }
+.settings-dropdown {
+  position: absolute; right: 16px; top: 100%; z-index: 100;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; min-width: 300px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+.settings-row { margin-bottom: 10px; }
+.settings-row label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.settings-hint { font-size: 11px; color: var(--muted); margin: 2px 0 0 20px; }
+.settings-input {
+  width: 100%; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px;
+  margin-top: 4px;
+}
+.settings-saving { font-size: 11px; color: var(--accent); }
+
+/* 树面板操作按钮组 */
+.tree-actions { display: flex; gap: 4px; }
+.mkdir-bar {
+  display: flex; gap: 4px; margin-bottom: 8px;
+}
+.mkdir-bar input {
+  flex: 1; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px;
+}
+.mkdir-bar button {
+  background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+
+/* 处理面板增强 */
+.force-label {
+  display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--muted); margin: 6px 0;
+}
+.clear-btn {
+  background: var(--panel2) !important; color: var(--warn) !important;
+  border-color: var(--warn) !important; font-size: 12px !important;
+}
+.clear-btn:hover { opacity: 0.8; }

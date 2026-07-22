@@ -8,6 +8,53 @@ interface Props {
   onOsPaths: (paths: string[]) => void;
 }
 
+/** 递归读取拖入的目录项（webkitGetAsEntry），返回所有文件的 File 对象。 */
+async function readDirEntries(
+  entry: any,
+  path: string = "",
+  acc: File[] = []
+): Promise<File[]> {
+  if (entry.isFile) {
+    return new Promise<File[]>((resolve) => {
+      entry.file((file: File) => {
+        // 如果在子目录中，修改 file.name 为相对路径以保留结构
+        if (path) {
+          const renamed = new File([file], path + "/" + file.name, {
+            type: file.type,
+            lastModified: file.lastModified,
+          });
+          acc.push(renamed);
+        } else {
+          acc.push(file);
+        }
+        resolve(acc);
+      });
+    });
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const entries = await new Promise<any[]>((resolve) => {
+      const all: any[] = [];
+      const readBatch = () => {
+        reader.readEntries((batch: any[]) => {
+          if (!batch.length) {
+            resolve(all);
+          } else {
+            all.push(...batch);
+            readBatch();
+          }
+        });
+      };
+      readBatch();
+    });
+    const subPath = path ? path + "/" + entry.name : entry.name;
+    for (const e of entries) {
+      await readDirEntries(e, subPath, acc);
+    }
+    return acc;
+  }
+  return acc;
+}
+
 export default function DropZone({ current, currentFolder, busy, onFiles, onOsPaths }: Props) {
   const [over, setOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -29,10 +76,29 @@ export default function DropZone({ current, currentFolder, busy, onFiles, onOsPa
     return () => unlisten && unlisten();
   }, [onOsPaths]);
 
-  const onDrop = (e: React.DragEvent) => {
+  const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setOver(false);
-    const files = Array.from(e.dataTransfer.files);
+
+    // 优先尝试 webkitGetAsEntry（支持文件夹递归）
+    const items = e.dataTransfer.items;
+    if (items && items.length > 0) {
+      const allFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const entry = item.webkitGetAsEntry?.();
+        if (entry) {
+          await readDirEntries(entry, "", allFiles);
+        }
+      }
+      if (allFiles.length) {
+        onFiles(allFiles);
+        return;
+      }
+    }
+
+    // 回退：普通文件拖入
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.size > 0);
     if (files.length) onFiles(files);
   };
 
@@ -60,9 +126,9 @@ export default function DropZone({ current, currentFolder, busy, onFiles, onOsPa
           e.target.value = "";
         }}
       />
-      <div className="dz-title">拖拽文件到此处 → 放入「{currentFolder || "仓库根"}」</div>
+      <div className="dz-title">拖拽文件或文件夹到此处 → 放入「{currentFolder || "仓库根"}」</div>
       <div className="dz-sub">
-        {busy ? "处理中…" : "点击也可选择文件（支持 md / 图片 / PDF 多选）"}
+        {busy ? "处理中…" : "支持 md / 图片 / PDF，可拖入整个文件夹（自动保留目录结构）"}
       </div>
     </div>
   );
