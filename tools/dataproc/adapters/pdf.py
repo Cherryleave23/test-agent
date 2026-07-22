@@ -1,11 +1,10 @@
-"""PDF 适配器：数字直抽 + 扫描件 PaddleOCR 3.x（+ 可选 PP-StructureV3 表格）。零 src.*。"""
+"""PDF 适配器：数字直抽 + 扫描件 PaddleOCR 3.x。零 src.*。"""
 from __future__ import annotations
 
 import logging
 import os
 
 from . import MIN_DIGITAL_TEXT, OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
-from ._ppstructure import extract_tables as _extract_tables_ppstructure, get_ppstructure
 from ._paddle_ocr import get_paddle_ocr
 
 logger = logging.getLogger(__name__)
@@ -40,7 +39,7 @@ def _render_pages(path: str):
 
 
 def _ocr_images(images, run_real_ocr: bool):
-    """对一组图像跑 PaddleOCR 3.x predict() + PP-StructureV3 表格识别。
+    """对一组图像跑 PaddleOCR 3.x predict()。
 
     3.x 结果格式：OCRResult (dict 子类)
       - rec_texts: list[str]
@@ -56,10 +55,7 @@ def _ocr_images(images, run_real_ocr: bool):
     ocr = get_paddle_ocr()
     if ocr is None:
         raise OCRDependencyMissing("PaddleOCR 未安装，无法对扫描件 PDF 做 OCR（RUN_REAL_OCR=1 但缺依赖）")
-    # PP-StructureV3 引擎（单例，缺依赖返回 None，保持 table_pending）
-    pp_engine = get_ppstructure()
     texts: list = []
-    tables: list = []
     low_conf = False
     for img in images:
         arr = np.array(img.convert("RGB"))
@@ -87,12 +83,8 @@ def _ocr_images(images, run_real_ocr: bool):
         if not page_lines:
             low_conf = True
         texts.append("\n".join(page_lines))
-        # PP-StructureV3 表格抽取（共享模块，异常不阻断 OCR 文本）
-        if pp_engine is not None:
-            page_tables = _extract_tables_ppstructure(arr)
-            tables.extend(page_tables)
     text = "\n".join(texts).strip()
-    return text, tables, low_conf
+    return text, low_conf
 
 
 def _extract_lines(res):
@@ -141,12 +133,12 @@ class PDFAdapter:
                       "pages": _page_count(path)},
             )
         # 扫描件：需真实 OCR
-        text, tables, low_conf = _ocr_images(_render_pages(path), run_real_ocr)
+        text, low_conf = _ocr_images(_render_pages(path), run_real_ocr)
         return AdapterResult(
             text=text,
             meta={"source": "pdf", "is_scanned": True, "ocr": True,
-                  "low_conf": low_conf, "table_pending": not tables},
-            tables=tables, low_conf=low_conf,
+                  "low_conf": low_conf},
+            low_conf=low_conf,
         )
 
 

@@ -3,7 +3,6 @@
 PP-OCRv6 优化（不做 1600px 预缩放，否则精度暴跌）：
   - 正常图片：传文件路径给 predict()，PaddleOCR 3.x 内置 max_side_limit=4000 自动缩放
   - 长图（高>3×宽）：按原始分辨率切片（每片 1200px），传 numpy 给 predict()
-  - 表格识别：PPStructureV3 内部限 4000px（见 _ppstructure.py）
 
 零 src.*。无文字/低置信标 low_conf，绝不编造。"""
 from __future__ import annotations
@@ -13,7 +12,6 @@ import logging
 import numpy as np
 
 from . import OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
-from ._ppstructure import extract_tables as _extract_tables_ppstructure, get_ppstructure
 from ._paddle_ocr import get_paddle_ocr
 
 logger = logging.getLogger(__name__)
@@ -124,7 +122,7 @@ class ImageTableAdapter:
     """图片/规格表/长图适配器。
 
     正常图片传文件路径给 PaddleOCR（内置 4000px 自动缩放，不做预缩放）；
-    长图按原始分辨率切片后逐片 OCR；表格识别走 PPStructureV3（内部限 4000px）。
+    长图按原始分辨率切片后逐片 OCR。
     """
     kind = "image_table"
 
@@ -167,12 +165,6 @@ class ImageTableAdapter:
                 results = _ocr_predict(ocr, path)
                 text, low_conf = _extract_text_from_results(results)
 
-            # PP-StructureV3 表格抽取（内部限 4000px，传入原始数组即可）
-            tables = []
-            if paddle_available() and get_ppstructure() is not None:
-                with Image.open(path) as pil:
-                    arr = np.array(pil.convert("RGB"))
-                tables = _extract_tables_ppstructure(arr)
         except (OCRDeferred, OCRDependencyMissing):
             raise
         except Exception as e:
@@ -180,11 +172,9 @@ class ImageTableAdapter:
             raise RuntimeError(f"图片处理失败: {type(e).__name__}: {e}") from e
 
         meta = {"source": "image", "ocr": True, "low_conf": low_conf}
-        if not tables:
-            meta["table_pending"] = True
         return AdapterResult(
             text=text,
             meta=meta,
-            tables=tables,
+            tables=[],
             low_conf=low_conf,
         )

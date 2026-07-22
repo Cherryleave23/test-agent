@@ -1,26 +1,18 @@
-"""PP-StructureV3 表格识别共享模块（PaddleOCR 3.x API）。
+"""PP-StructureV3 表格识别模块（已禁用）。
 
-性能优化：
-  - mkldnn + monkey-patch（同 _paddle_ocr.py）
-  - 内部限长边 4000px（调用方传原始数组即可，无需预缩放）
-  - 关闭不需要的模块（方向分类/矫正/公式/印章/图表）
+表格识别功能已移除——PPStructureV3 加载 PP-OCRv5 server 模型导致处理极慢
+（单张大图 >2 分钟），对产品图片场景不实用。
 
-3.x 变更：
-  - PPStructure → PPStructureV3
-  - __call__(img) → predict(img)
-  - 结果格式：LayoutParsingResultV2，table_res_list[i]["pred_html"]
+保留 TableHTMLParser 和 extract_tables 接口（返回空列表）以保持向后兼容，
+未来如需重新启用表格识别可在此模块恢复 PPStructureV3 引擎。
 """
 from __future__ import annotations
 
 import logging
-import os
-import threading
 from html.parser import HTMLParser
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 
 class TableHTMLParser(HTMLParser):
@@ -84,154 +76,16 @@ class TableHTMLParser(HTMLParser):
             self._cur_cell += data
 
 
-_pp_engine: Optional[object] = None
-_pp_initialized: bool = False
-_pp_lock = threading.Lock()
-
-
-def get_ppstructure():
-    """获取 PPStructureV3 引擎单例。
-
-    配置：mkldnn + patch + 关闭不需要的模块。
-    缺依赖返回 None。
-    """
-    global _pp_engine, _pp_initialized
-    if _pp_initialized:
-        return _pp_engine
-    with _pp_lock:
-        if _pp_initialized:
-            return _pp_engine
-        _pp_initialized = True
-        try:
-            from paddleocr import PPStructureV3
-        except ImportError:
-            logger.info("paddleocr 未安装，PPStructureV3 表格识别不可用")
-            _pp_engine = None
-            return _pp_engine
-
-        # 复用 OCR 的 mkldnn patch
-        from ._paddle_ocr import _patch_paddle_inference_config
-        _patch_paddle_inference_config()
-
-        try:
-            _pp_engine = PPStructureV3(
-                use_table_recognition=True,
-                use_formula_recognition=False,
-                use_chart_recognition=False,
-                use_seal_recognition=False,
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                lang="ch",
-                engine="paddle_static",
-                engine_config={
-                    "device_type": "cpu",
-                    "cpu_threads": 4,
-                    "run_mode": "mkldnn",
-                },
-            )
-            logger.info("PPStructureV3 引擎初始化成功 (mkldnn, 表格识别=ON)")
-        except TypeError:
-            try:
-                _pp_engine = PPStructureV3(
-                    use_table_recognition=True,
-                    use_formula_recognition=False,
-                    use_chart_recognition=False,
-                    use_seal_recognition=False,
-                    use_doc_orientation_classify=False,
-                    use_doc_unwarping=False,
-                    lang="ch",
-                )
-                logger.info("PPStructureV3 引擎初始化成功（兼容模式）")
-            except Exception as e:
-                logger.warning("PPStructureV3 引擎初始化失败: %s: %s", type(e).__name__, e)
-                _pp_engine = None
-        except Exception as e:
-            logger.warning("PPStructureV3 引擎初始化失败: %s: %s", type(e).__name__, e)
-            _pp_engine = None
-    return _pp_engine
-
-
-_MAX_SIDE = 4000  # 表格识别最大边长（超过则缩放，平衡速度与精度）
-
-
-def _resize_for_pp(arr):
-    """缩放图片到最大边长 _MAX_SIDE（超过才缩放）。"""
-    import numpy as np
-    h, w = arr.shape[:2]
-    long_side = max(h, w)
-    if long_side <= _MAX_SIDE:
-        return arr
-    scale = _MAX_SIDE / long_side
-    try:
-        import cv2
-        return np.asarray(cv2.resize(arr, (int(w * scale), int(h * scale))))
-    except ImportError:
-        # 无 cv2 时用 PIL 缩放
-        from PIL import Image
-        pil = Image.fromarray(arr)
-        pil = pil.resize((int(w * scale), int(h * scale)))
-        return np.array(pil)
+def get_ppstructure() -> Optional[object]:
+    """表格识别已禁用，始终返回 None。"""
+    return None
 
 
 def extract_tables(img_array) -> list:
-    """用 PPStructureV3 从图像中抽取表格区域，返回 table dict 列表。
-
-    内部自动缩放到最大 4000px，调用方传原始数组即可。
-    """
-    engine = get_ppstructure()
-    if engine is None:
-        return []
-    out: list = []
-    try:
-        arr = _resize_for_pp(img_array)
-        results = list(engine.predict(arr))
-        if not results:
-            return out
-        res = results[0]
-        table_res_list = res.get("table_res_list", []) if isinstance(res, dict) else []
-        if not table_res_list:
-            return out
-        for table_res in table_res_list:
-            if not isinstance(table_res, dict):
-                continue
-            html = table_res.get("pred_html", "")
-            if not html:
-                continue
-            parser = TableHTMLParser()
-            parser.feed(html)
-            cells = parser.rows if parser.rows else []
-            cell_boxes = table_res.get("cell_box_list", [])
-            bbox = _compute_bbox(cell_boxes)
-            out.append({
-                "html": html,
-                "cells": cells,
-                "bbox": bbox,
-            })
-    except Exception as e:
-        logger.warning("PPStructureV3 表格抽取异常: %s: %s", type(e).__name__, e)
-    return out
-
-
-def _compute_bbox(cell_boxes) -> list:
-    if not cell_boxes:
-        return [0, 0, 0, 0]
-    try:
-        xs1, ys1, xs2, ys2 = [], [], [], []
-        for box in cell_boxes:
-            if len(box) >= 4:
-                xs1.append(float(box[0]))
-                ys1.append(float(box[1]))
-                xs2.append(float(box[2]))
-                ys2.append(float(box[3]))
-        if not xs1:
-            return [0, 0, 0, 0]
-        return [min(xs1), min(ys1), max(xs2), max(ys2)]
-    except (ValueError, TypeError):
-        return [0, 0, 0, 0]
+    """表格识别已禁用，返回空列表。"""
+    return []
 
 
 def reset():
-    """重置引擎缓存（测试用）。"""
-    global _pp_engine, _pp_initialized
-    _pp_engine = None
-    _pp_initialized = False
+    """空操作（向后兼容）。"""
+    pass
