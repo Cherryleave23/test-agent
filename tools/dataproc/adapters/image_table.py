@@ -57,8 +57,12 @@ def _reading_order(lines):
     """按阅读顺序排序：(min_y, min_x)。"""
     def key(ln):
         box = ln[0]
-        ys = [p[1] for p in box]
-        xs = [p[0] for p in box]
+        # box 可能是 list[list] 或 np.ndarray
+        try:
+            ys = [float(p[1]) for p in box]
+            xs = [float(p[0]) for p in box]
+        except (TypeError, IndexError, ValueError):
+            return (0, 0)
         return (min(ys), min(xs))
     return sorted(lines, key=key)
 
@@ -77,10 +81,19 @@ def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
     for chunk in _slice_long(gray):
         # PaddleOCR 接受 RGB 数组；转回 3 通道
         rgb = np.stack([chunk] * 3, axis=-1)
-        res = ocr.ocr(rgb, cls=True)
-        if not res or not res[0]:
+        # PaddleOCR 3.x: 使用 predict()，2.x: 使用 ocr(cls=True)
+        # 先尝试 3.x API（predict），降级到 2.x API（ocr）
+        try:
+            res = list(ocr.predict(rgb))
+        except (TypeError, AttributeError):
+            try:
+                res = ocr.ocr(rgb, cls=True)
+            except TypeError:
+                res = ocr.ocr(rgb)
+        if not res:
             continue
-        for line in _reading_order(res[0]):
+        lines = _extract_lines(res)
+        for line in _reading_order(lines):
             try:
                 box, (txt, score) = line
             except (ValueError, TypeError):
@@ -93,6 +106,36 @@ def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
     if not text:
         low_conf = True
     return text, low_conf
+
+
+def _extract_lines(res):
+    """从 PaddleOCR 结果中提取行列表（兼容 2.x 和 3.x 格式）。
+
+    2.x: res = [[[box, (txt, score)], ...]]
+    3.x: res = [{'rec_texts': [...], 'rec_scores': [...], 'dt_polys': [...]}, ...]
+         或 res = [dict_with_rec_texts]
+    """
+    if not res:
+        return []
+    # 2.x 格式：res[0] 是列表
+    if isinstance(res[0], list):
+        return res[0]
+    # 3.x 格式：res 是 dict 或 dict 列表
+    if isinstance(res, dict):
+        res = [res]
+    if isinstance(res, list) and res and isinstance(res[0], dict):
+        d = res[0]
+        texts = d.get("rec_texts", [])
+        scores = d.get("rec_scores", [])
+        polys = d.get("dt_polys", [])
+        lines = []
+        for i in range(len(texts)):
+            txt = texts[i] if i < len(texts) else ""
+            score = float(scores[i]) if i < len(scores) else 0.0
+            box = polys[i] if i < len(polys) else [[0, 0], [0, 0], [0, 0], [0, 0]]
+            lines.append((box, (txt, score)))
+        return lines
+    return []
 
 
 class ImageTableAdapter:

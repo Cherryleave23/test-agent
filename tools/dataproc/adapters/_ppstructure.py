@@ -104,13 +104,22 @@ def get_ppstructure():
         try:
             from paddleocr import PPStructure
             _pp_engine = PPStructure(
-                show_log=False, layout=True, table=True,
+                layout=True, table=True,
                 ocr=True, structure_version="PP-StructureV2",
             )
             logger.info("PP-Structure 引擎初始化成功")
         except ImportError:
             logger.info("paddleocr 未安装，PP-Structure 表格识别不可用")
             _pp_engine = None
+        except TypeError:
+            # PaddleOCR 3.x API 变更，尝试简化参数
+            try:
+                from paddleocr import PPStructure
+                _pp_engine = PPStructure()
+                logger.info("PP-Structure 引擎初始化成功（兼容模式）")
+            except Exception as e:
+                logger.warning("PP-Structure 引擎初始化失败: %s: %s", type(e).__name__, e)
+                _pp_engine = None
         except Exception as e:
             logger.warning("PP-Structure 引擎初始化失败: %s: %s", type(e).__name__, e)
             _pp_engine = None
