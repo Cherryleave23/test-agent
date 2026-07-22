@@ -1,4 +1,10 @@
-"""图片/规格表/电商长图适配器：opencv 预处理 + PaddleOCR 3.x + 阅读顺序 + 长图切片。
+"""图片/规格表/电商长图适配器：PaddleOCR 3.x + 阅读顺序 + 长图切片。
+
+PP-OCRv6 优化（不做 1600px 预缩放，否则精度暴跌）：
+  - 正常图片：传文件路径给 predict()，PaddleOCR 3.x 内置 max_side_limit=4000 自动缩放
+  - 长图（高>3×宽）：按原始分辨率切片（每片 1200px），传 numpy 给 predict()
+  - 表格识别：PPStructureV3 内部限 4000px（见 _ppstructure.py）
+
 零 src.*。无文字/低置信标 low_conf，绝不编造。"""
 from __future__ import annotations
 
@@ -18,39 +24,20 @@ SLICE_H = 1200          # 单切片像素高
 SLICE_OVERLAP = 120     # 切片重叠，避免切断行
 
 
-def _get_cv2():
-    """延迟导入 cv2，避免模块加载时硬依赖。"""
-    import cv2
-    return cv2
-
-
-def _preprocess(img: np.ndarray) -> np.ndarray:
-    """轻量预处理：缩放（限长边）→ 灰度 → CLAHE 增强对比。"""
-    cv2 = _get_cv2()
-    h, w = img.shape[:2]
-    long_side = max(h, w)
-    if long_side > 1600:
-        scale = 1600 / long_side
-        img = np.asarray(cv2.resize(img, (int(w * scale), int(h * scale))))
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    return clahe.apply(gray)
-
-
-def _slice_long(gray: np.ndarray):
-    """长图（高>宽数倍）纵向切片，带重叠避免切断。"""
-    h, w = gray.shape
+def _slice_long_rgb(arr: np.ndarray):
+    """长图（高>宽数倍）纵向切片，带重叠避免切断。RGB 输入/输出。"""
+    h, w = arr.shape[:2]
     if h <= SLICE_RATIO * w:
-        yield gray
+        yield arr
         return
     step = SLICE_H - SLICE_OVERLAP
     last_y = 0
     for y in range(0, max(h - SLICE_H, 0) + 1, step):
-        yield gray[y:y + SLICE_H]
+        yield arr[y:y + SLICE_H]
         last_y = y
-    # 末片收尾：仅当还存在未被覆盖的尾部（且不与上一片完全重复）时补一片
+    # 末片收尾：仅当还存在未被覆盖的尾部时补一片
     if h - SLICE_H > last_y:
-        yield gray[h - SLICE_H:h]
+        yield arr[h - SLICE_H:h]
 
 
 def _reading_order(lines):
@@ -66,38 +53,26 @@ def _reading_order(lines):
     return sorted(lines, key=key)
 
 
-def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
-    """对预处理后的灰度图跑 PaddleOCR 3.x predict()。
+def _ocr_predict(ocr, input_data):
+    """调用 PaddleOCR predict()，兼容文件路径和 numpy 数组输入。
 
-    3.x 结果格式：OCRResult (dict 子类)
-      - rec_texts: list[str]
-      - rec_scores: list[float]
-      - dt_polys: list[ndarray]
+    3.x: ocr.predict(input) → list[OCRResult]
+    2.x: ocr.ocr(input, cls=True)
     """
-    if not run_real_ocr:
-        raise OCRDeferred("run_real_ocr=False，图片 OCR 推迟")
-    if not paddle_available():
-        raise OCRDependencyMissing("PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
+    try:
+        return list(ocr.predict(input_data))
+    except (TypeError, AttributeError):
+        try:
+            return ocr.ocr(input_data, cls=True)
+        except TypeError:
+            return ocr.ocr(input_data)
 
-    ocr = get_paddle_ocr()
-    if ocr is None:
-        raise OCRDependencyMissing("PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
+
+def _extract_text_from_results(results):
+    """从 OCR 结果中提取文本行，返回 (text, low_conf)。"""
     texts: list = []
     low_conf = False
-    for chunk in _slice_long(gray):
-        # PaddleOCR 接受 RGB 数组；转回 3 通道
-        rgb = np.stack([chunk] * 3, axis=-1)
-        # PaddleOCR 3.x: 使用 predict()
-        try:
-            results = list(ocr.predict(rgb))
-        except (TypeError, AttributeError):
-            # 兼容 2.x: ocr(cls=True)
-            try:
-                results = ocr.ocr(rgb, cls=True)
-            except TypeError:
-                results = ocr.ocr(rgb)
-        if not results:
-            continue
+    if results:
         lines = _extract_lines(results)
         for line in _reading_order(lines):
             try:
@@ -146,30 +121,65 @@ def _extract_lines(res):
 
 
 class ImageTableAdapter:
-    """图片/规格表/长图适配器。"""
+    """图片/规格表/长图适配器。
+
+    正常图片传文件路径给 PaddleOCR（内置 4000px 自动缩放，不做预缩放）；
+    长图按原始分辨率切片后逐片 OCR；表格识别走 PPStructureV3（内部限 4000px）。
+    """
     kind = "image_table"
 
     def extract(self, path: str, run_real_ocr: bool = False) -> AdapterResult:
         from PIL import Image
         try:
+            if not run_real_ocr:
+                raise OCRDeferred("run_real_ocr=False，图片 OCR 推迟")
+            if not paddle_available():
+                raise OCRDependencyMissing(
+                    "PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
+
+            ocr = get_paddle_ocr()
+            if ocr is None:
+                raise OCRDependencyMissing(
+                    "PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
+
+            # 读取图片尺寸判断是否长图
             with Image.open(path) as pil:
-                arr = np.array(pil.convert("RGB"))
-            gray = _preprocess(arr)
-            text, low_conf = _ocr_image(gray, run_real_ocr)
-            # PP-StructureV3 表格抽取
-            # 用预缩放后的 RGB 图（gray → RGB），避免在全分辨率图上跑（太慢）
+                w, h = pil.size
+            is_long = h > SLICE_RATIO * w
+
+            if is_long:
+                # 长图：按原始分辨率切片后逐片 OCR（切片高度 1200px，无需额外缩放）
+                with Image.open(path) as pil:
+                    arr = np.array(pil.convert("RGB"))
+                text_parts: list = []
+                low_conf = False
+                for chunk in _slice_long_rgb(arr):
+                    results = _ocr_predict(ocr, chunk)
+                    t, lc = _extract_text_from_results(results)
+                    if t:
+                        text_parts.append(t)
+                    low_conf = low_conf or lc
+                text = "\n".join(text_parts).strip()
+                if not text:
+                    low_conf = True
+            else:
+                # 正常图片：传文件路径，PaddleOCR 3.x 内置 max_side_limit=4000 自动缩放
+                results = _ocr_predict(ocr, path)
+                text, low_conf = _extract_text_from_results(results)
+
+            # PP-StructureV3 表格抽取（内部限 4000px，传入原始数组即可）
             tables = []
-            if run_real_ocr and paddle_available() and get_ppstructure() is not None:
-                # 从预处理后的灰度图重建 RGB（已缩放到 ≤1600px）
-                resized_rgb = np.stack([gray] * 3, axis=-1)
-                tables = _extract_tables_ppstructure(resized_rgb)
+            if paddle_available() and get_ppstructure() is not None:
+                with Image.open(path) as pil:
+                    arr = np.array(pil.convert("RGB"))
+                tables = _extract_tables_ppstructure(arr)
         except (OCRDeferred, OCRDependencyMissing):
             raise
         except Exception as e:
             logger.exception("图片适配器处理失败 %s: %s", type(e).__name__, e)
             raise RuntimeError(f"图片处理失败: {type(e).__name__}: {e}") from e
-        meta = {"source": "image", "ocr": True, "low_conf": low_conf,
-                "preprocess": "resize+gray+CLAHE"}
+
+        meta = {"source": "image", "ocr": True, "low_conf": low_conf}
         if not tables:
             meta["table_pending"] = True
         return AdapterResult(

@@ -2,7 +2,7 @@
 
 性能优化：
   - mkldnn + monkey-patch（同 _paddle_ocr.py）
-  - 接收预缩放图片（调用方负责缩放到 1600px）
+  - 内部限长边 4000px（调用方传原始数组即可，无需预缩放）
   - 关闭不需要的模块（方向分类/矫正/公式/印章/图表）
 
 3.x 变更：
@@ -151,17 +151,40 @@ def get_ppstructure():
     return _pp_engine
 
 
+_MAX_SIDE = 4000  # 表格识别最大边长（超过则缩放，平衡速度与精度）
+
+
+def _resize_for_pp(arr):
+    """缩放图片到最大边长 _MAX_SIDE（超过才缩放）。"""
+    import numpy as np
+    h, w = arr.shape[:2]
+    long_side = max(h, w)
+    if long_side <= _MAX_SIDE:
+        return arr
+    scale = _MAX_SIDE / long_side
+    try:
+        import cv2
+        return np.asarray(cv2.resize(arr, (int(w * scale), int(h * scale))))
+    except ImportError:
+        # 无 cv2 时用 PIL 缩放
+        from PIL import Image
+        pil = Image.fromarray(arr)
+        pil = pil.resize((int(w * scale), int(h * scale)))
+        return np.array(pil)
+
+
 def extract_tables(img_array) -> list:
     """用 PPStructureV3 从图像中抽取表格区域，返回 table dict 列表。
 
-    注意：调用方应传入预缩放的图片（≤1600px），否则会很慢。
+    内部自动缩放到最大 4000px，调用方传原始数组即可。
     """
     engine = get_ppstructure()
     if engine is None:
         return []
     out: list = []
     try:
-        results = list(engine.predict(img_array))
+        arr = _resize_for_pp(img_array)
+        results = list(engine.predict(arr))
         if not results:
             return out
         res = results[0]
