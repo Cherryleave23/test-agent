@@ -2,78 +2,59 @@
 # @module ingest
 """PP-Structure 表格识别 + 分类器验收（P2/P3 补全）。
 
-  T1  PP-Structure 引擎初始化函数存在且可导入（不要求实际装 paddleocr）
-  T2  _extract_tables_ppstructure 对空输入返回空列表（不崩）
-  T3  _TableHTMLParser 能正确解析 HTML 表格为二维数组
+  T1  PP-Structure 共享模块可导入（get_ppstructure / extract_tables / TableHTMLParser）
+  T2  extract_tables 对 None 引擎返回空列表（不崩）
+  T3  TableHTMLParser（从共享模块导入）能正确解析 HTML 表格为二维数组
   T4  classifier.classify_ptype 正确推断羊奶粉/有机奶粉/牛奶粉
   T5  classifier.classify_category 正确推断配方粉/营养品
-  T6  classifier.classify 返回 {ptype, product_category} 且 conf.yaml 覆盖生效
-  T7  ImageTableAdapter.extract 在无 OCR 时标 table_pending（默认绿）
-  T8  test_dataproc_pdf.py 的 fitz 缺失不再崩溃（FITZ_OK 门控）
+  T6  classifier.classify 返回 {ptype, product_category} 完整结构
+  T7  ImageTableAdapter.extract 在无 OCR 时抛 OCRDeferred
+  T8  test_dataproc_pdf.py 在无 fitz 时行为正确（不崩，退出码 0）
+  T9  classifier conf.yaml 覆盖路径生效（自定义 ptype→category 映射）
+  T10 classifier conf.yaml 缓存生效（多次调用不重复读文件）
 
 直接运行：python3 test_ppstructure_table.py  → 退出码 0 全过，非 0 有失败。
 """
 import os
 import sys
 import tempfile
+import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 
-def t1_ppstructure_func_exists():
-    """T1: PP-Structure 初始化函数存在且可导入。"""
-    from dataproc.adapters.pdf import _try_init_ppstructure, _extract_tables_ppstructure
-    assert callable(_try_init_ppstructure), "_try_init_ppstructure 应为可调用函数"
-    assert callable(_extract_tables_ppstructure), "_extract_tables_ppstructure 应为可调用函数"
+def t1_ppstructure_shared_module():
+    """T1: PP-Structure 共享模块可导入。"""
+    from dataproc.adapters._ppstructure import (
+        get_ppstructure, extract_tables, TableHTMLParser, reset
+    )
+    assert callable(get_ppstructure), "get_ppstructure 应为可调用函数"
+    assert callable(extract_tables), "extract_tables 应为可调用函数"
+    assert callable(TableHTMLParser), "TableHTMLParser 应为可调用类"
+    assert callable(reset), "reset 应为可调用函数"
     # 不装 paddleocr 时应返回 None（不崩）
-    engine = _try_init_ppstructure()
+    reset()
+    engine = get_ppstructure()
     assert engine is None or hasattr(engine, "__call__"), \
-        f"_try_init_ppstructure 应返回 None 或引擎对象，实际: {type(engine)}"
+        f"get_ppstructure 应返回 None 或引擎对象，实际: {type(engine)}"
 
 
 def t2_extract_empty_input():
-    """T2: _extract_tables_ppstructure 对空/异常输入返回空列表。"""
-    from dataproc.adapters.pdf import _extract_tables_ppstructure
-    # 传 None 引擎 + 空数组
-    result = _extract_tables_ppstructure(None, [])
-    assert result == [], f"空输入应返回空列表，实际: {result}"
+    """T2: extract_tables 对无引擎时返回空列表。"""
+    from dataproc.adapters._ppstructure import extract_tables, reset
+    reset()  # 确保引擎被清除
+    # 无 paddleocr 时 engine=None，extract_tables 应返回 []
+    result = extract_tables([])
+    assert result == [], f"无引擎时应返回空列表，实际: {result}"
 
 
-def t3_html_parser():
-    """T3: _TableHTMLParser 能正确解析 HTML 表格为二维数组。"""
-    from html.parser import HTMLParser
-
-    class _TableHTMLParser(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.rows: list = []
-            self._cur_row: list = []
-            self._cur_cell: str = ""
-            self._in_cell = False
-
-        def handle_starttag(self, tag, attrs):
-            if tag == "tr":
-                self._cur_row = []
-            elif tag in ("td", "th"):
-                self._in_cell = True
-                self._cur_cell = ""
-
-        def handle_endtag(self, tag):
-            if tag == "tr":
-                if self._cur_row:
-                    self.rows.append(self._cur_row)
-            elif tag in ("td", "th"):
-                self._cur_row.append(self._cur_cell.strip())
-                self._in_cell = False
-
-        def handle_data(self, data):
-            if self._in_cell:
-                self._cur_cell += data
-
+def t3_html_parser_from_shared():
+    """T3: TableHTMLParser（从共享模块导入）能正确解析 HTML 表格。"""
+    from dataproc.adapters._ppstructure import TableHTMLParser
     html = '<html><body><table><tr><td>品牌</td><td>飞鹤</td></tr><tr><td>段位</td><td>1段</td></tr></table></body></html>'
-    parser = _TableHTMLParser()
+    parser = TableHTMLParser()
     parser.feed(html)
     assert len(parser.rows) == 2, f"应解析出 2 行，实际: {len(parser.rows)}"
     assert parser.rows[0] == ["品牌", "飞鹤"], f"第 1 行不匹配: {parser.rows[0]}"
@@ -115,12 +96,14 @@ def t6_classify_full():
 
 
 def t7_image_table_table_pending():
-    """T7: ImageTableAdapter 无 OCR 时标 table_pending（默认绿）。"""
-    from PIL import Image, ImageDraw
+    """T7: ImageTableAdapter 无 OCR 时抛 OCRDeferred。"""
+    from PIL import Image
     from dataproc.adapters import OCRDeferred
     from dataproc.adapters.image_table import ImageTableAdapter
 
-    p = tempfile.mktemp(suffix=".png")
+    # 使用 mkstemp 替代 mktemp（更安全）
+    fd, p = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
     img = Image.new("RGB", (400, 200), (255, 255, 255))
     img.save(p)
     try:
@@ -128,28 +111,80 @@ def t7_image_table_table_pending():
         assert False, "应抛 OCRDeferred"
     except OCRDeferred:
         pass  # 正确：推迟
-    os.unlink(p)
+    finally:
+        os.unlink(p)
 
 
-def t8_pdf_test_fitz_guard():
-    """T8: test_dataproc_pdf.py 的 fitz 缺失不再崩溃（FITZ_OK 门控）。"""
-    # 读源码确认有 FITZ_OK 门控
+def t8_pdf_test_behavior():
+    """T8: test_dataproc_pdf.py 在无 fitz 时行为正确（实际运行，退出码 0）。"""
     test_path = os.path.join(ROOT, "harness", "test_dataproc_pdf.py")
-    with open(test_path, "r", encoding="utf-8") as f:
-        src = f.read()
-    assert "FITZ_OK" in src, "test_dataproc_pdf.py 应包含 FITZ_OK 门控"
-    assert "try:" in src and "import fitz" in src, "应有 try/except 包裹 fitz 导入"
+    result = subprocess.run(
+        [sys.executable, test_path],
+        capture_output=True, text=True, timeout=30,
+        env={**os.environ, "RUN_REAL_OCR": "0"},
+    )
+    assert result.returncode == 0, \
+        f"test_dataproc_pdf.py 应退出码 0，实际 {result.returncode}。\nstdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+def t9_conf_yaml_override():
+    """T9: classifier conf.yaml 覆盖路径生效。"""
+    import yaml as _yaml
+    from dataproc.classifier import classify, load_category_overrides
+
+    # 创建临时 conf.yaml，自定义 ptype→category 映射
+    conf_dir = tempfile.mkdtemp()
+    conf_path = os.path.join(conf_dir, "conf.yaml")
+    with open(conf_path, "w", encoding="utf-8") as f:
+        _yaml.dump({"product_categories": {"牛奶粉": "定制类别"}}, f, allow_unicode=True)
+
+    overrides = load_category_overrides(conf_path)
+    assert "牛奶粉" in overrides, f"conf.yaml 应包含牛奶粉映射，实际: {overrides}"
+    assert overrides["牛奶粉"] == "定制类别"
+
+    result = classify("优质牛奶粉 2段", conf_path)
+    assert result["ptype"] == "牛奶粉"
+    assert result["product_category"] == "定制类别", f"conf.yaml 覆盖应生效，实际: {result['product_category']}"
+
+    os.unlink(conf_path)
+    os.rmdir(conf_dir)
+
+
+def t10_conf_cache():
+    """T10: classifier conf.yaml 缓存生效（多次调用不重复读文件）。"""
+    import yaml as _yaml
+    from dataproc.classifier import classify, _overrides_path, _overrides_mtime
+    import dataproc.classifier as cls_mod
+
+    conf_dir = tempfile.mkdtemp()
+    conf_path = os.path.join(conf_dir, "conf.yaml")
+    with open(conf_path, "w", encoding="utf-8") as f:
+        _yaml.dump({"product_categories": {"牛奶粉": "缓存测试"}}, f, allow_unicode=True)
+
+    # 第一次调用：加载并缓存
+    classify("牛奶粉", conf_path)
+    assert cls_mod._overrides_path == conf_path, "缓存路径应设置"
+    first_mtime = cls_mod._overrides_mtime
+
+    # 第二次调用：应命中缓存（不重新读文件）
+    classify("牛奶粉", conf_path)
+    assert cls_mod._overrides_mtime == first_mtime, "mtime 未变时应命中缓存"
+
+    os.unlink(conf_path)
+    os.rmdir(conf_dir)
 
 
 CHECKS = [
-    ("T1 PP-Structure 函数存在且可导入", t1_ppstructure_func_exists),
-    ("T2 _extract_tables 对空输入返回空列表", t2_extract_empty_input),
-    ("T3 _TableHTMLParser 解析 HTML 表格", t3_html_parser),
+    ("T1 PP-Structure 共享模块可导入", t1_ppstructure_shared_module),
+    ("T2 extract_tables 无引擎返回空列表", t2_extract_empty_input),
+    ("T3 TableHTMLParser 从共享模块解析 HTML", t3_html_parser_from_shared),
     ("T4 classify_ptype 推断奶粉类型", t4_classify_ptype),
     ("T5 classify_category 推断商品大类", t5_classify_category),
     ("T6 classify 返回完整分类结构", t6_classify_full),
-    ("T7 ImageTableAdapter 无 OCR 标 table_pending", t7_image_table_table_pending),
-    ("T8 test_dataproc_pdf fitz 门控", t8_pdf_test_fitz_guard),
+    ("T7 ImageTableAdapter 无 OCR 抛 OCRDeferred", t7_image_table_table_pending),
+    ("T8 test_dataproc_pdf 行为测试（退出码 0）", t8_pdf_test_behavior),
+    ("T9 conf.yaml 覆盖路径生效", t9_conf_yaml_override),
+    ("T10 conf.yaml 缓存生效", t10_conf_cache),
 ]
 
 

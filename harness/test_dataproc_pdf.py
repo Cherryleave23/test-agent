@@ -81,12 +81,16 @@ def main():
             r3 = PDFAdapter().extract(p3, run_real_ocr=True)
             if r3.meta.get("is_scanned") and (r3.text or r3.tables):
                 print("[PASS] I8")
+                # I9: PP-Structure 接入验证 — 真实 OCR 下 meta 应包含 table_pending 或 tables
+                if "table_pending" in r3.meta or r3.tables:
+                    print("[PASS] I9 (PP-Structure 已接入，table_pending 或 tables 存在)")
+                else:
+                    fails.append(f"I9: 真实 OCR 下 meta 应含 table_pending 或 tables，实际 meta={r3.meta}")
             else:
                 fails.append(f"I8: 扫描件 OCR 未产出文本/表格 meta={r3.meta}")
         except Exception as e:
             fails.append(f"I8: 扫描件 OCR 抛错 {e}")
         os.unlink(p3)
-        print("[PASS] I9 (PP-Structure 已接入，缺依赖时 table_pending)")
     else:
         print(f"[SKIP] I8/I9 真实 OCR 门控（RUN_REAL_OCR={run_real}, paddle_available={paddle_available()}）")
 

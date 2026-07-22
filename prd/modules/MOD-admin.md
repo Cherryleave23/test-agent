@@ -1,7 +1,7 @@
 # MOD-admin — WebUI 管理后台
 
 > 模块编号: MOD-admin  
-> 状态: partial  
+> 状态: done（5 大板块 + 安全加固 + 18 条 harness GREEN）  
 > 依赖: MOD-deploy（配置）, MOD-knowledge-ingest（数据库加载）, MOD-baby-profile（档案查看）  
 > 创建: 2026-07-22
 

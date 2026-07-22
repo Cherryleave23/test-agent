@@ -2,11 +2,14 @@
 零 src.*。无文字/低置信标 low_conf，绝不编造。"""
 from __future__ import annotations
 
-import os
+import logging
 
 import numpy as np
 
 from . import OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
+from ._ppstructure import extract_tables as _extract_tables_ppstructure, get_ppstructure
+
+logger = logging.getLogger(__name__)
 
 # 长图纵向切片阈值：高 > SLICE_RATIO*宽 视为长图
 SLICE_RATIO = 3.0
@@ -14,16 +17,22 @@ SLICE_H = 1200          # 单切片像素高
 SLICE_OVERLAP = 120     # 切片重叠，避免切断行
 
 
+def _get_cv2():
+    """延迟导入 cv2，避免模块加载时硬依赖。"""
+    import cv2
+    return cv2
+
+
 def _preprocess(img: np.ndarray) -> np.ndarray:
     """轻量预处理：缩放（限长边）→ 灰度 → CLAHE 增强对比。"""
+    cv2 = _get_cv2()
     h, w = img.shape[:2]
     long_side = max(h, w)
     if long_side > 1600:
         scale = 1600 / long_side
-        img = np.asarray(__import__("cv2").resize(
-            img, (int(w * scale), int(h * scale))))
-    gray = __import__("cv2").cvtColor(img, __import__("cv2").COLOR_RGB2GRAY)
-    clahe = __import__("cv2").createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        img = np.asarray(cv2.resize(img, (int(w * scale), int(h * scale))))
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     return clahe.apply(gray)
 
 
@@ -77,83 +86,20 @@ def _ocr_image(gray: np.ndarray, run_real_ocr: bool):
     return text, low_conf
 
 
-def _extract_tables_from_image(img_array, run_real_ocr: bool) -> list:
-    """用 PP-Structure 从图片中抽取表格区域，返回 table dict 列表。
-
-    在 OCR 文本提取之后调用，对原图（RGB）跑 PP-Structure 版面分析+表格识别。
-    缺依赖时返回空列表（调用方标 table_pending）。
-    """
-    if not run_real_ocr or not paddle_available():
-        return []
-    try:
-        from paddleocr import PPStructure
-        from html.parser import HTMLParser
-
-        class _TableHTMLParser(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.rows: list = []
-                self._cur_row: list = []
-                self._cur_cell: str = ""
-                self._in_cell = False
-
-            def handle_starttag(self, tag, attrs):
-                if tag == "tr":
-                    self._cur_row = []
-                elif tag in ("td", "th"):
-                    self._in_cell = True
-                    self._cur_cell = ""
-
-            def handle_endtag(self, tag):
-                if tag == "tr":
-                    if self._cur_row:
-                        self.rows.append(self._cur_row)
-                elif tag in ("td", "th"):
-                    self._cur_row.append(self._cur_cell.strip())
-                    self._in_cell = False
-
-            def handle_data(self, data):
-                if self._in_cell:
-                    self._cur_cell += data
-
-        engine = PPStructure(show_log=False, layout=True, table=True,
-                             ocr=True, structure_version="PP-StructureV2")
-        results = engine(img_array)
-        tables: list = []
-        if not results:
-            return tables
-        for region in results:
-            if not isinstance(region, dict):
-                continue
-            if region.get("type") != "table":
-                continue
-            res = region.get("res", {})
-            html = res.get("html", "") if isinstance(res, dict) else ""
-            bbox = region.get("bbox", [0, 0, 0, 0])
-            if not html:
-                continue
-            parser = _TableHTMLParser()
-            parser.feed(html)
-            cells = parser.rows if parser.rows else []
-            tables.append({"html": html, "cells": cells, "bbox": bbox})
-        return tables
-    except Exception:
-        return []
-
-
 class ImageTableAdapter:
     """图片/规格表/长图适配器。"""
     kind = "image_table"
 
     def extract(self, path: str, run_real_ocr: bool = False) -> AdapterResult:
-        import cv2
         from PIL import Image
         pil = Image.open(path).convert("RGB")
         arr = np.array(pil)
         gray = _preprocess(arr)
         text, low_conf = _ocr_image(gray, run_real_ocr)
-        # PP-Structure 表格抽取（对原图 RGB 跑版面分析+表格识别）
-        tables = _extract_tables_from_image(arr, run_real_ocr)
+        # PP-Structure 表格抽取（共享模块，对原图 RGB 跑版面分析+表格识别）
+        tables = []
+        if run_real_ocr and paddle_available() and get_ppstructure() is not None:
+            tables = _extract_tables_ppstructure(arr)
         meta = {"source": "image", "ocr": True, "low_conf": low_conf,
                 "preprocess": "resize+gray+CLAHE"}
         if not tables:

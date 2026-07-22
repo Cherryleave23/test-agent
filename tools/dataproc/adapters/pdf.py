@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from . import MIN_DIGITAL_TEXT, OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
+from ._ppstructure import extract_tables as _extract_tables_ppstructure, get_ppstructure
 
 
 def _digital_text(path: str) -> str:
@@ -40,8 +41,8 @@ def _ocr_images(images, run_real_ocr: bool):
     from paddleocr import PaddleOCR
     import numpy as np
     ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
-    # PP-Structure 表格识别引擎（与 PaddleOCR 同包，但独立模型）
-    pp_engine = _try_init_ppstructure()
+    # PP-Structure 引擎（单例，缺依赖返回 None，保持 table_pending）
+    pp_engine = get_ppstructure()
     texts: list = []
     tables: list = []
     low_conf = False
@@ -60,91 +61,12 @@ def _ocr_images(images, run_real_ocr: bool):
         if not page_lines:
             low_conf = True
         texts.append("\n".join(page_lines))
-        # PP-Structure 表格抽取
+        # PP-Structure 表格抽取（共享模块，异常不阻断 OCR 文本）
         if pp_engine is not None:
-            page_tables = _extract_tables_ppstructure(pp_engine, arr)
+            page_tables = _extract_tables_ppstructure(arr)
             tables.extend(page_tables)
     text = "\n".join(texts).strip()
     return text, tables, low_conf
-
-
-def _try_init_ppstructure():
-    """尝试初始化 PP-Structure 引擎；缺依赖返回 None（调用方保持 table_pending）。"""
-    try:
-        from paddleocr import PPStructure
-        return PPStructure(show_log=False, layout=True, table=True,
-                           ocr=True, structure_version="PP-StructureV2")
-    except Exception:
-        return None
-
-
-def _extract_tables_ppstructure(pp_engine, img_array) -> list:
-    """用 PP-Structure 从图像中抽取表格，返回 table dict 列表。
-
-    每个 table dict 包含：
-    - html: 表格 HTML 结构字符串
-    - cells: [[row_val, ...], ...] 二维数组（从 HTML 解析）
-    - bbox: [x1, y1, x2, y2] 表格区域坐标
-    """
-    import re
-    from html.parser import HTMLParser
-
-    class _TableHTMLParser(HTMLParser):
-        """从 PP-Structure 输出的 HTML 中解析单元格为二维数组。"""
-
-        def __init__(self):
-            super().__init__()
-            self.rows: list = []
-            self._cur_row: list = []
-            self._cur_cell: str = ""
-            self._in_cell = False
-
-        def handle_starttag(self, tag, attrs):
-            if tag == "tr":
-                self._cur_row = []
-            elif tag in ("td", "th"):
-                self._in_cell = True
-                self._cur_cell = ""
-
-        def handle_endtag(self, tag):
-            if tag == "tr":
-                if self._cur_row:
-                    self.rows.append(self._cur_row)
-            elif tag in ("td", "th"):
-                self._cur_row.append(self._cur_cell.strip())
-                self._in_cell = False
-
-        def handle_data(self, data):
-            if self._in_cell:
-                self._cur_cell += data
-
-    out: list = []
-    try:
-        results = pp_engine(img_array)
-        if not results:
-            return out
-        for region in results:
-            if not isinstance(region, dict):
-                continue
-            if region.get("type") != "table":
-                continue
-            res = region.get("res", {})
-            html = res.get("html", "") if isinstance(res, dict) else ""
-            bbox = region.get("bbox", [0, 0, 0, 0])
-            if not html:
-                continue
-            # 从 HTML 解析单元格
-            parser = _TableHTMLParser()
-            parser.feed(html)
-            cells = parser.rows if parser.rows else []
-            out.append({
-                "html": html,
-                "cells": cells,
-                "bbox": bbox,
-            })
-    except Exception:
-        pass  # PP-Structure 表格抽取失败不阻断 OCR 文本
-    return out
 
 
 class PDFAdapter:

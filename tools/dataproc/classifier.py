@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from typing import Optional
 
 try:
     import yaml
 except ImportError:
     yaml = None  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 
 # ptype 推断规则：按优先级从高到低匹配
@@ -38,9 +41,14 @@ _PTYPE_RULES: list = [
 _CATEGORY_RULES: list = [
     (r"奶粉|配方粉|formula|stage|\d\s*段", "配方粉"),
     (r"DHA|益生菌|维生素|钙|铁|锌|nutrient|营养", "营养品"),
-    (r"米粉|米糊|辅食|辅食|cereal", "辅食"),
+    (r"米粉|米糊|辅食|cereal", "辅食"),
     (r"纸尿裤|尿不湿|diaper", "日用品"),
 ]
+
+# 模块级缓存：conf.yaml 只读一次（文件 mtime 变更时刷新）
+_overrides_cache: dict = {}
+_overrides_path: Optional[str] = None
+_overrides_mtime: float = 0.0
 
 
 def classify_ptype(text: str) -> str:
@@ -71,7 +79,7 @@ def classify_category(text: str) -> str:
 
 
 def load_category_overrides(conf_path: Optional[str] = None) -> dict:
-    """从 conf.yaml 加载企业自定义 product_category 映射。
+    """从 conf.yaml 加载企业自定义 product_category 映射（带 mtime 缓存）。
 
     conf.yaml 格式示例：
         product_categories:
@@ -80,17 +88,30 @@ def load_category_overrides(conf_path: Optional[str] = None) -> dict:
           DHA: 营养品
 
     返回 {ptype_or_keyword: category} 映射；缺文件返回 {}。
+    缓存策略：文件 mtime 未变时返回缓存，变更时重新加载。
     """
+    global _overrides_cache, _overrides_path, _overrides_mtime
     if not conf_path:
         here = os.path.dirname(os.path.abspath(__file__))
         conf_path = os.path.join(here, "conf.yaml")
     if not os.path.isfile(conf_path) or yaml is None:
         return {}
+    # mtime 缓存：路径相同且 mtime 未变时返回缓存
+    try:
+        mtime = os.path.getmtime(conf_path)
+    except OSError:
+        return {}
+    if conf_path == _overrides_path and mtime == _overrides_mtime:
+        return _overrides_cache
     try:
         with open(conf_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-        return data.get("product_categories", {}) or {}
-    except Exception:
+        _overrides_cache = data.get("product_categories", {}) or {}
+        _overrides_path = conf_path
+        _overrides_mtime = mtime
+        return _overrides_cache
+    except Exception as e:
+        logger.warning("conf.yaml 加载失败: %s: %s", type(e).__name__, e)
         return {}
 
 
