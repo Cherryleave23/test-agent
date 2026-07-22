@@ -5,7 +5,7 @@
 
 | 模块 ID | 职责（一句话） | 详解文件 | Harness 标签 | 状态 |
 |---------|----------------|----------|--------------|------|
-| MOD-knowledge-ingest | 数据采集归一 + 商品实体解析/分类；跨越两有界上下文（standalone 工具 `tools/dataproc/` ↔ agent 端 `src/ingest/importer`） | `modules/MOD-knowledge-ingest.md` | ingest | partial（P1 已绿：统一接口+注册表+真实爬虫+管线；P2/P3=工具侧 OCR/PDF+结构化/解析/分类 已设计；P4=agent 端 importer 加载 bundle 已设计；均待落地） |
+| MOD-knowledge-ingest | 数据采集归一 + 商品实体解析/分类；跨越两有界上下文（standalone 工具 `tools/dataproc/` ↔ agent 端 `src/ingest/importer`）+ P5 GUI 工作台（复用引擎的人机界面） | `modules/MOD-knowledge-ingest.md` | ingest | partial（P1 已绿；P2/P3/P4 已设计待落地；F1 store 签名修复已落地；P5 GUI 工作台已设计待落地） |
 | MOD-kb | 企业定制知识库：分块/嵌入/向量检索（企业间隔离） | `modules/MOD-kb.md` | kb | partial（分块/嵌入/向量检索+独立重排器已跑通真实嵌入） |
 | MOD-agent | RAG 问答核心：检索增强+企业定制 prompt+可切换 LLM | `modules/MOD-agent.md` | agent | partial（RAG 核心+每企业可配置 LLM+约束块注入已落地） |
 | MOD-session | 多员工会话隔离：(企业×员工×会话) 三级隔离 | `modules/MOD-session.md` | session | partial（P1：用户约束抽取累积 B + 短期摘要压缩 A，注入 prompt） |

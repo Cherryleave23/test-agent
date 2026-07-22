@@ -279,6 +279,72 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 
 ---
 
+## 〇·P5、本次实施（GUI 工作台 —— 数据处理工具的人机界面，复用 `tools/dataproc/` 引擎）
+
+> 分类：**P4 扩展（新交互面）**。在 P2/P3/P4 的 standalone 引擎与产物契约之上，补一个**可打开的 GUI 工作台**，
+> 让运营/企业 IT 用「选仓库 → 树状管理资料 → 拖拽入桶 → 选择性/全量处理 → 看已处理结构」的方式操作数据工具。
+> **引擎不变、契约不变**：GUI 只是 `tools/dataproc/` 引擎的编排前端（后端直接 import 引擎、产出 NDJSON bundle），
+> 与 agent 仍零耦合。交付形态 = **Tauri 桌面应用**（双击打开即本地进程），前端用 React SPA，后端用 FastAPI 复用引擎。
+> 决策（已确认）：实现路线=手写 Web GUI（不魔改整包开源）；交付=Tauri 桌面应用。
+
+### 意图（must-have）
+1. **仓库选择/新建/切换**：打开先选仓库（如「总部资料库」「企业A资料库」「企业B资料库」）。仓库=磁盘目录，映射 `enterprise_id` + 命名空间（`hq` 共享库 / `b` 企业自有）。支持新建仓库（填名称→生成 `enterprise_id`→建目录骨架）与切换仓库。
+2. **固定三类总文件夹树（类 Obsidian，顶层定死）**：每个仓库根下三个总文件夹，分别对应产物契约的 `kind`：
+   - `产品资料` → `kind=product_text`（有结构化字段时同时落 `products.ndjson`）
+   - `知识类文章` → `kind=article`（总部库则 `hq_kb` 只读）
+   - `原料资料` → `kind=ingredient`（如 DHA 深度文件）
+   - 总文件夹下**任意多层嵌套**（例：`产品资料/奶粉/伊利/星飞帆/星飞帆1段800g（新国标）`），子层名由用户自由定（产品名/系列/段位…），引擎按最终落点文件夹推断分类。
+3. **拖拽入当前文件夹**：用户点开某文件夹后，面板出现拖拽区，把文件（md/图片/PDF）拖入即落到该文件夹（不破坏现有结构）。
+4. **全量 / 选择性处理**：可「处理整个仓库」或「选择性处理」——支持单选文件、多选文件、按文件夹选中、多选文件夹。处理时按文件所在的总文件夹（kind）+ 嵌套路径（product_uid 层级）调度引擎。
+5. **处理标记（防重复）**：每个仓库维护处理状态库（`<repo>/.dataproc/processed.db`，SQLite），以「相对路径 + 内容哈希」为键记录 `processed`/`pending`/`failed` + 产出 bundle 引用；已 `processed` 且哈希未变的文件跳过，避免重复处理。
+6. **右侧「已处理结构」面板**：左树右侧展示处理产出结构（哪些文件已处理/待处理/失败、产物 bundle 位置、各 `kind` 计数），与左树镜像对照。
+7. 每行为配 harness（CVC 只增不删）。
+
+### 非目标（non-goals）
+- **不改数据处理引擎**：OCR/结构化/解析/分类/产物契约全部复用 `tools/dataproc/`（P2/P3/P4）；GUI 后端只做编排与 IO，不重写引擎、不 `import src.*`。
+- **不实现微信发图入口**：GUI 是桌面/本地运营工具，与 MOD-wechat 无关。
+- **不做权限/多用户**：单仓库单运营者本地使用；企业隔离由 `enterprise_id` + 仓库目录保证，不做库内 RBAC。
+- **不改动产物契约**：P5 产出的 bundle 与 P4 importer 完全兼容（仅多一个 `processed.db` 侧车，不入 bundle）。
+- **Tauri 原生构建依赖**（webkit2gtk 等）在打包机装；本仓库交付源码 + 配置，沙箱内以「本地 Web 服务」形态验证。
+
+### 架构与文件布局（`tools/dataproc/gui/`）
+```
+gui/
+  backend/
+    main.py        # FastAPI app，暴露 REST（见下）
+    repos.py       # 仓库新建/切换/列举；<repo>/.dataproc/repo.json（name/enterprise_id/namespace/created_at）
+    tree.py        # 列举固定三类顶层 + 任意嵌套；映射 folder→kind
+    upload.py      # 拖拽上传落到当前文件夹
+    process.py     # 全量/选择性触发 → 调 dataproc 引擎 build → 产 NDJSON bundle
+    markers.py     # processed.db：相对路径→内容哈希→status
+    models.py      # pydantic 入参/出参
+  frontend/        # React SPA (Vite)：RepoBar/TreePanel/DropZone/ProcessPanel/ProcessedPanel/api.ts
+  src-tauri/       # Tauri 壳：config + main.rs（DnD 走 tauri://drag-drop；build 前需系统依赖）
+```
+**REST（后端）**：`GET /repos`、`POST /repos`、`POST /repos/switch`、`GET /tree?repo=&path=`、`POST /upload?repo=&folder=`、`POST /process`（body: 全量或 {files:[...]}/{folders:[...]}）、`GET /processed?repo=`、`GET /bundle?repo=`。
+**仓库↔契约映射**：仓库 `namespace=hq` → 产物 `hq_products.ndjson`+`corpus` 走 `hq_kb`；`namespace=b` → `products.ndjson`+`corpus` 走 `b_kb`。文件总文件夹决定 `kind`，嵌套路径决定 `product_uid` 层级键。
+
+### 文件与 harness 落点
+| 文件 | 动作 | 说明 |
+|------|------|------|
+| `tools/dataproc/gui/backend/{main,repos,tree,upload,process,markers,models}.py` | 新 | FastAPI 后端，复用 `dataproc` 引擎，零 `import src.*` |
+| `tools/dataproc/gui/frontend/src/{App,api.ts,components/*}.tsx` | 新 | React SPA：仓库栏/树/拖拽区/处理面板/已处理面板 |
+| `tools/dataproc/gui/src-tauri/{tauri.conf.json,src/main.rs,Cargo.toml}` | 新 | Tauri 桌面壳配置 |
+| `harness/test_gui_backend.py` | 新 | `@module ingest`：G1 仓库 / G2 树嵌套 / G3 上传 / G4 标记去重 / G5 触发产 bundle（mock 引擎） |
+
+> 状态：**planned（P5，GUI 工作台）**。与 P2/P3/P4 同批理念；落地后 MOD-knowledge-ingest 升级、G1 进展。
+
+### P5 harness 验收表（计划，`harness/test_gui_backend.py`，`@module ingest`）
+| 编号 | 断言 | 对应实现 | 门控 |
+|------|------|----------|------|
+| G1 | 新建/切换仓库：`repo.json` 生成、`enterprise_id`+`namespace` 落库、切换生效 | `repos` | 默认 |
+| G2 | 固定三类顶层 + 多层嵌套树正确列举（产品资料/奶粉/伊利/星飞帆/…） | `tree` | 默认 |
+| G3 | 拖拽上传落到当前文件夹、不破坏现有结构 | `upload` | 默认 |
+| G4 | 处理标记去重：同文件哈希未变二次处理跳过（计数 0） | `markers`+`process` | 默认 |
+| G5 | 触发处理（全量/选择性）产出 NDJSON bundle（mock 引擎，引擎真实调度路径） | `process` | 默认（fixture 源） |
+
+---
+
 ## 一、采集适配器（三类来源，C3）—— 均位于 standalone 工具 `tools/dataproc/`
 
 > 下表适配器实现于 `tools/dataproc/adapters/`，产出归一为**产物契约**（见「〇·产物契约」），**不在本模块（agent 端）直接写库**。
@@ -358,6 +424,7 @@ P3 的"结构化抽取"通过 **工具自身的 LLM provider 抽象**（`tools/d
 | RES1–RES7 | 结构化抽取 + 实体解析 + 分类（**见「〇·P3」**，工具侧） | `test_dataproc_resolver` | ⏸ 计划 P3 |
 | IMP1–IMP6 | agent 端导入器加载 bundle → store → retrieve 命中（**见「〇·P4」**，隔离边界） | `test_importer` | ⏸ 计划 P4 |
 | F1 | `store.add_knowledge`/`add_hq_knowledge` 签名支持 `product_id`+`meta.kind`，hq 不再硬编码 `kind='hq_kb'` | `test_store_corpus_kind` | ✅ 已落地（F1 修复，corpus kind 语义去撞） |
+| G1–G5 | GUI 工作台后端：仓库/树嵌套/上传/标记去重/触发产 bundle（**见「〇·P5」**） | `test_gui_backend` | ⏸ 计划 P5 |
 
 ---
 
