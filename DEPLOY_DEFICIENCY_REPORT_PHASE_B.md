@@ -172,4 +172,4 @@ pytest harness/test_phaseb_pending_guard.py harness/test_dataproc_feedback.py \
 1. **PB-1 延伸**：dataproc 对"已忽略文件"除 WARNING 外，可在 GUI/CLI 汇总里显式列出，并支持"移动至标准文件夹"的一键纠正，进一步降低真人误操作成本。
 2. **PB-2 延伸**：当前是"推荐时提示"。更稳妥可改为"待确认商品默认不进入主动推荐候选集，仅在员工显式问到该品名时才带合规提示"，并把它与后台"确认"动作闭环（确认后自动解除限制）。
 3. **PB-3 延伸（可选）**：真实 LLM 偶发返回异常 JSON 仍会触发熔断降级（现有 resilient 设计，成功解析即复位）；如需更稳，可对瞬时解析失败做指数退避重试，再计入熔断计数。
-4. **PB-1 / D4 闭环（图片原生 + 版面复杂资料解析）**：当前 Tier A（PP-OCRv6 纯文本，CPU 可跑，已在用）只抽扁平文本，版面复杂图（成分表/营养标签/图表）结构丢失、图片无 OCR 时仍落空 `ocr_pending`。建议新增 **Tier B = PaddleOCR-VL-0.9B**（视觉语言文档解析，Apache-2.0、可自托管、需 GPU）作为可选装版面/结构解析档，覆盖表格(OTSL)/图表/公式/阅读顺序，直接替代被禁的 PP-StructureV3 并闭合 D4；配合 Tier C 人工待确认兜底（不编造）。完整设计见 [`DATAPROC_IMAGE_LAYOUT_TIER.md`](./DATAPROC_IMAGE_LAYOUT_TIER.md)，一并闭合 D6（离线预置模型）、D11（GUI 预览 Markdown 解析结果）。
+4. **PB-1 / D4（图片原生 + 版面复杂资料解析）**：已确定 **v6-only 方案**——PP-OCRv6 medium，完整安装 `paddleocr[all]>=3.7.0` + PaddlePaddle 3.x（已实现并实测验证，见 [`DATAPROC_IMAGE_LAYOUT_TIER.md`](./DATAPROC_IMAGE_LAYOUT_TIER.md)）。PB-1 经 Tier A + `ocr_pending` 可见 WARN 闭合；**PaddleOCR-VL（Tier B）暂不接入**，故 **D4（成分表等表格结构）当前仍为已知限制**——v6 只抽扁平文本，表格结构丢失，需运营在 GUI 转 Excel/结构化录入兜底。D6（离线预置模型）、D11（GUI 预览提取文本）已由 v6 完整安装覆盖。

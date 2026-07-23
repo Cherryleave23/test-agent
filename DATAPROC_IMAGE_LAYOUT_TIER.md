@@ -6,6 +6,8 @@
 > 关联决策：CVC 纪律（PRD 为准、Tier 可插拔、诚实搬运、pending 待确认闭环）、端侧 1 家 1 实例、合规不出域。
 > 研究依据：PaddleOCR-VL（arXiv 2510.14528，2025-10）、PaddleOCR-VL 官方文档、PP-OCRv6 官方文档（2026-06）。
 
+> **🚦 当前范围决策（2026-07-23）**：**不接入 PaddleOCR-VL（Tier B）**，仅使用 **PP-OCRv6（Tier A，medium 模型，完整安装 `paddleocr[all]>=3.7.0` + PaddlePaddle 3.x）**。下文对 PaddleOCR-VL 的调研仅作后续可选扩展的参考，不影响当前 v6-only 实现；Tier B 相关代码/一致性校验暂不落地。完整安装已实测验证（PaddlePaddle 3.3.1 + paddleocr 3.7.0 + paddlex 3.7.2，`get_paddle_ocr()` 成功加载 PP-OCRv6_medium 并跑通 OCR）。
+
 ---
 
 ## 1. 问题定义：两类资料当前都被"降级处理"
@@ -138,8 +140,8 @@
         │      PP-OCRv6_medium（CPU+mkldnn，或 DATAPROC_OCR_DEVICE=gpu）
         │      → 扁平文本；端侧门店机器也能跑
         │
-        ├─ Tier B  版面 / 结构解析（新增，可选装，需 GPU/自托管）
-        │      PaddleOCR-VL-0.9B（PP-DocLayoutV2 + VLM，vLLM 服务端）
+        ├─ Tier B  版面 / 结构解析（⛔ 暂不接入：当前决策 v6-only）
+        │      PaddleOCR-VL-0.9B（PP-DocLayoutV2 + VLM，vLLM 服务端）— 仅作后续可选扩展参考
         │      → Markdown/JSON：文本+表格(OTSL)+图表+公式+阅读顺序
         │      → 命中即产出结构化 corpus（替代被禁的 PP-StructureV3）
         │
@@ -149,24 +151,26 @@
               → 闭环回写（pending-confirmation loop）
 ```
 
+> **范围说明（2026-07-23）**：当前仅实现 **Tier A（PP-OCRv6 medium，完整安装）**。Tier B（PaddleOCR-VL）按决策**暂不接入**，故下方「Tier B 已装配」分支、一致性校验（规则 2/3/5）为**预留设计**，当前实现不会触发；v6-only 下版面复杂资料（成分表/营养标签/图表）结构仍会丢失（见 §4 D4），由 Tier C 人工兜底。
+
 **派发规则（诚实搬运，不编造）**：
 1. 端侧无 GPU / `ocr_enabled=False` / 离线 → 只跑 Tier A；版面复杂图退化为扁平文本并标 `ocr_pending`。
-2. 检测到版面/表格/图表特征（或所在文件夹为「原料资料/产品资料」且为图片）→ 若 Tier B 已装配，则走 Tier B 出结构化 Markdown。
-3. Tier B 输出再喂给现有 `structurer`（`structure()` + `classify()` + `resolve()`）做产品结构化抽取，与 `.md` 产品资料同一条链路。
+2. （预留）检测到版面/表格/图表特征 → 若 Tier B 已装配，则走 Tier B 出结构化 Markdown（当前 v6-only 不触发）。
+3. （预留）Tier B 输出再喂给现有 `structurer` 做产品结构化抽取（当前不触发）。
 4. Tier B 不可用 / 解析失败 → 回退 Tier A 文本 + `ocr_pending=True`，进入 Tier C 人工闭环（**绝不编造表格内容**）。
-5. **v1.6 一致性校验（合规笼子）**：当 Tier B 与 Tier A 同时可用，比对 Tier B 结构化文本与 Tier A 扁平文本；若关键字段（注册号/含量数字/成分名）差异超阈值或 Tier B 出现 Tier A 未见过的实体，标 `ocr_pending` + `vl_consistency="review"`，进 Tier C 人工核对——把生成式 VLM 的低概率错字/结构幻觉拦在入库前。
+5. （预留）**v1.6 一致性校验（合规笼子）**：当 Tier B 与 Tier A 同时可用时比对（当前不触发）——把生成式 VLM 的低概率错字/结构幻觉拦在入库前。
 
 ---
 
 ## 4. 与既有约束 / 缺陷的对应
 
-| 既有缺口 | 本板块如何闭合 |
+| 既有缺口 | 本板块如何闭合（v6-only 当前状态） |
 |---|---|
-| **PB-1** 图片无 OCR → 空占位 | Tier A 常驻 + Tier B 可选；两者皆不可用时仍走 Tier C `ocr_pending` + 可见 WARN（已由 PB-1 修复补 WARN，此处补"能解析"的另一半） |
-| **D4** PP-Structure 表格禁用 → 成分表结构丢失 | **Tier B（PaddleOCR-VL）直接替代 PP-StructureV3**：一次性解决表格+图表+公式+阅读顺序，且比原 server 模型快得多（GPU 1.2 页/秒 vs 旧 >2 分钟/大图） |
-| **D6** 离线端侧首次联网下载 ~300MB | Tier A 模型（~30MB）纳入安装包 Tier 2 捆绑；Tier B 模型（0.9B）预置到高配/HQ 服务器镜像，门店端侧默认只启用 Tier A，规避联网依赖 |
-| **D11** GUI 仅预览 .md/.txt | Tier B 输出 Markdown → GUI 可直接渲染预览/核对（前端 `<img>` + Markdown 对照），运营校验 OCR/解析结果不再盲导 |
-| **合规不出域** | PP-OCRv6 / PaddleOCR-VL 均自托管（Apache-2.0）；图片不出门店/企业服务器，满足端侧 1 家 1 实例 + 数据不出域 |
+| **PB-1** 图片无 OCR → 空占位 | Tier A 常驻（medium，完整安装）；无 OCR 环境仍走 Tier C `ocr_pending` + 可见 WARN（已由 PB-1 修复补 WARN） |
+| **D4** PP-Structure 表格禁用 → 成分表结构丢失 | ⚠️ **v6-only 下仍为已知限制**：PP-OCRv6 只抽扁平文本，表格/图表/公式结构丢失；Tier B（PaddleOCR-VL）暂缓接入，故 D4 暂未闭合，需运营在 GUI 转 Excel/结构化录入兜底（不编造） |
+| **D6** 离线端侧首次联网下载 ~300MB | Tier A 模型（medium ~34MB）随完整安装预置；门店端侧默认只启用 Tier A，规避联网依赖（已在 manifest 声明 `paddleocr[all]`） |
+| **D11** GUI 仅预览 .md/.txt | Tier A 输出文本 → GUI 可展示原图 + 提取文本对照，运营校验 OCR 结果不再盲导 |
+| **合规不出域** | PP-OCRv6 自托管（PaddlePaddle 3.x + Apache 生态）；图片不出门店/企业服务器，满足端侧 1 家 1 实例 + 数据不出域 |
 
 ---
 
@@ -209,5 +213,5 @@
 
 ## 7. 一句话结论
 
-> 用 **PP-OCRv6（纯文本，CPU 保底，零幻觉）** 守端侧底线，用 **PaddleOCR-VL-1.6（0.9B，版面/表格/图表/公式/印章/阅读顺序，GPU 自托管，Apache-2.0，OmniDocBench v1.6 96.33% SOTA）** 补版面复杂资料的"结构"缺口；
-> 二者经现有 `structurer` + `pending-confirmation` 闭环汇入同一 corpus 链路，并以"Tier B 输出 vs Tier A 文本一致性校验"把 VL 生成式风险关进合规笼子，直接闭合 **PB-1 / D4 / D6 / D11**，且不破坏合规不出域与端侧 1 家 1 实例约束。
+> **当前实现（v6-only）**：用 **PP-OCRv6_medium（完整安装 `paddleocr[all]>=3.7.0` + PaddlePaddle 3.x，CPU 保底、零幻觉、可切 GPU）** 作为 dataproc 唯一图片/OCR 解析档，经现有 `structurer` + `pending-confirmation` 闭环汇入 corpus 链路，闭合 **PB-1 / D6 / D11**，且不破坏合规不出域与端侧 1 家 1 实例约束。
+> **已知限制**：版面复杂资料（成分表/营养标签/图表）的**结构**在 v6-only 下仍丢失（**D4 未闭合**），由 Tier C 人工待确认兜底（GUI 转 Excel/结构化录入，不编造）；PaddleOCR-VL（Tier B）按决策暂不接入，其表格/图表/公式结构化能力留作后续可选扩展。
