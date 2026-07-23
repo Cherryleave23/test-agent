@@ -1,8 +1,13 @@
-"""图片/规格表/电商长图适配器：PaddleOCR 3.x + tbpu 排版解析 + 长图切片。
+"""图片/规格表/电商长图适配器：PaddleOCR 3.x（官方 PP-OCRv6_medium）+ tbpu 排版解析 + 长图切片 + 超大图处理。
 
-PP-OCRv6 优化（不做 1600px 预缩放，否则精度暴跌）：
-  - 正常图片：传文件路径给 predict()，PaddleOCR 3.x 内置 max_side_limit=4000 自动缩放
-  - 长图（高>3×宽）：按原始分辨率切片（每片 1200px），传 numpy 给 predict()
+遵循官方运行方式（精度优先，不预缩放、不做精度折衷的 hack）：
+  - 正常图片（max(宽,高) ≤ 4000）：传文件路径给 predict()，PaddleOCR 3.x 内置 max_side_limit=4000 自动缩放。
+  - 超大图（任一边长 > 4000，且非"瘦长条"）：采用社区最佳实践"缩小检测 + 原图识别"——
+    在缩放图（长边 ≤4000，保证坐标映射精确）上做文本检测定位，坐标映射回原图后从【原图】
+    裁剪高清小图做识别。识别在原图分辨率上进行，避免官方把整图缩放到 4000 后识别丢失细节
+    （精度优先；参考用户提供的方案，已适配 PaddleOCR 3.x API，用官方 predict() 而非 2.x ocr()）。
+  - 长图（高>3×宽）：按原始分辨率纵向切片（每片 1200px，带重叠避免切断行）后逐片 OCR。
+    切片与原图识别同理都是"保分辨率"，精度中立/改善，与官方方案不冲突。
 
 排版解析：使用 Umi-OCR 的 tbpu 模块（GapTree 间隙树 + ParagraphParse 段落分析），
 自动识别多栏布局并按人类阅读顺序排序，替代原来的简单 (min_y, min_x) 排序。
@@ -13,6 +18,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+from PIL import Image
 
 from . import OCRDeferred, OCRDependencyMissing, AdapterResult, paddle_available
 from ._paddle_ocr import get_paddle_ocr
@@ -24,6 +30,15 @@ logger = logging.getLogger(__name__)
 SLICE_RATIO = 3.0
 SLICE_H = 1200          # 单切片像素高
 SLICE_OVERLAP = 120     # 切片重叠，避免切断行
+
+# 超大图（任一边长超过模型 max_side_limit=4000）处理参数
+# 方案：缩小图做检测（定位文字框）→ 坐标映射回原图 → 原图高清裁剪做识别。
+# 这是 PaddleOCR 社区公认的"大图 OCR 最佳实践"，精度优先（识别在原图分辨率上进行，
+# 避免官方把整图缩放到 4000 后识别丢失细节）。仅对超出限制的大图启用，普通图仍走官方路径。
+LARGE_IMAGE_LIMIT = 4000   # 触发阈值：max(宽,高) > 此值视为超大图（走方案一二合一）
+LARGE_DET_SHORT_SIZE = 1500  # 检测用缩图的目标短边（越小检测越快，但过小会漏检小字）
+LARGE_DET_MAX_SIDE = 4000   # 检测用缩图的长边上限（=模型 max_side_limit，保证不触发模型内部再缩放，坐标映射才精确）
+LARGE_CROP_PADDING = 5      # 原图裁剪外扩边距，防止切太紧
 
 
 def _slice_long_rgb(arr: np.ndarray):
@@ -40,6 +55,107 @@ def _slice_long_rgb(arr: np.ndarray):
     # 末片收尾：仅当还存在未被覆盖的尾部时补一片
     if h - SLICE_H > last_y:
         yield arr[h - SLICE_H:h]
+
+
+def _extract_polys(res):
+    """从 PaddleOCR 3.x predict 结果中提取检测多边形（4×2，numpy）。
+
+    输入 res: list[OCRResult]（list(ocr.predict(...)) 的返回）
+    返回: [np.ndarray(shape=(4,2)), ...]
+    """
+    if not res:
+        return []
+    first = res[0]
+    if isinstance(first, dict) and "dt_polys" in first:
+        return [np.array(p, dtype=np.float64) for p in first.get("dt_polys", [])]
+    return []
+
+
+def _detect_recognize_scaled(ocr, tile: np.ndarray, original: np.ndarray, off_x=0, off_y=0):
+    """缩小检测 + 原图识别（核心，方案一二合一的基础单元）。
+
+    在 tile（整图或切片）上缩小做检测，定位文字框；坐标映射回【original 原图】的全局坐标系，
+    从 original 裁剪高清小图做识别——识别始终在原图分辨率上进行，保精度。
+    off_x/off_y 为该 tile 在 original 中的左上角偏移（切片兜底时为非零）。
+
+    返回 [(global_box(4,2,ndarray), (text, score)), ...]（global_box 为 original 坐标系）。
+    """
+    h, w = tile.shape[:2]
+    oh, ow = original.shape[:2]
+    short, long = min(h, w), max(h, w)
+
+    # 1) 检测用缩图（长边 ≤ max_side_limit，短边尽量接近目标；绝不放大）
+    scale = min(LARGE_DET_SHORT_SIZE / short, LARGE_DET_MAX_SIDE / long, 1.0)
+    if scale < 1.0:
+        det_w, det_h = int(round(w * scale)), int(round(h * scale))
+        det_img = np.array(Image.fromarray(tile).resize((det_w, det_h)))
+    else:
+        det_img = tile
+
+    # 2) 缩图检测（det_img 长边已 ≤ LARGE_DET_MAX_SIDE=4000=模型默认 max_side_limit，
+    #    模型不会在内部再缩放，坐标映射才精确；故不额外传 text_det_limit_side_len）
+    det_res = list(ocr.predict(det_img))
+    polys = _extract_polys(det_res)
+    if not polys:
+        return []
+
+    # 3) 坐标映射回 original 全局坐标 → 从 original 裁剪 → 识别
+    sx, sy = w / det_img.shape[1], h / det_img.shape[0]
+    crops, boxes = [], []
+    for poly in polys:
+        local = (poly * [sx, sy]).astype(np.int32)          # tile 内坐标
+        x1, y1 = local.min(axis=0)
+        x2, y2 = local.max(axis=0)
+        x1 = max(0, x1 - LARGE_CROP_PADDING)
+        y1 = max(0, y1 - LARGE_CROP_PADDING)
+        x2 = min(w, x2 + LARGE_CROP_PADDING)
+        y2 = min(h, y2 + LARGE_CROP_PADDING)
+        # 映射到 original 全局坐标并夹紧
+        gx1, gx2 = max(0, x1 + off_x), min(ow, x2 + off_x)
+        gy1, gy2 = max(0, y1 + off_y), min(oh, y2 + off_y)
+        crop = original[gy1:gy2, gx1:gx2]
+        if crop.size == 0:
+            continue
+        crops.append(crop)
+        gbox = local.copy()
+        gbox[:, 0] += off_x
+        gbox[:, 1] += off_y
+        boxes.append(gbox)
+
+    if not crops:
+        return []
+
+    # 4) 原图裁剪批量识别
+    rec_results = list(ocr.predict(crops))
+    lines = []
+    for box, rr in zip(boxes, rec_results):
+        if not isinstance(rr, dict):
+            continue
+        texts = rr.get("rec_texts", []) or []
+        scores = rr.get("rec_scores", []) or []
+        if texts:
+            text = "".join(str(t) for t in texts)
+            score = float(min(scores)) if scores else 0.0
+            lines.append((box, (text, score)))
+
+    return lines
+
+
+def _ocr_large_image(ocr, arr: np.ndarray):
+    """普通超大图（max(边) > 4000）：缩小检测 + 原图识别（精度优先，方案一二合一）。
+
+    这是大图 OCR 的统一处理入口。关于方案二（2.x 的 slice 切片）：
+    PaddleOCR 3.x 的 predict() **没有 slice 参数**（已核实 3.7.0 全包无 slice/horizontal_stride
+    定义）——2.x 需要切片是因为无法高效处理超大图的整图检测；而本方案在缩图上以模型原生
+    max_side_limit(=4000) 做**单次整图检测**（检测分辨率已是 3.x 最优），再在原图分辨率上识别，
+    已在精度与速度上覆盖方案二的诉求，故 3.x 下无需再手写切片。若遇超大图中"文字极小"导致
+    4000px 检测仍漏检，应调高 LARGE_DET_MAX_SIDE（并同步放开模型 text_det_limit_side_len），
+    而非滑窗切片。
+    """
+    lines = _detect_recognize_scaled(ocr, arr, arr, 0, 0)
+    if not lines:
+        return "", True
+    return process_ocr_lines(lines, "multi_para")
 
 
 def _ocr_predict(ocr, input_data):
@@ -130,15 +246,15 @@ class ImageTableAdapter:
                 raise OCRDependencyMissing(
                     "PaddleOCR 未安装，无法对图片做 OCR（RUN_REAL_OCR=1 但缺依赖）")
 
-            # 读取图片尺寸判断是否长图
+            # 读取图片尺寸判断分支：超大图 / 长图 / 正常图
             with Image.open(path) as pil:
                 w, h = pil.size
+                arr = np.array(pil.convert("RGB"))
             is_long = h > SLICE_RATIO * w
+            is_oversized = max(h, w) > LARGE_IMAGE_LIMIT
 
             if is_long:
-                # 长图：按原始分辨率切片后逐片 OCR（切片高度 1200px，无需额外缩放）
-                with Image.open(path) as pil:
-                    arr = np.array(pil.convert("RGB"))
+                # 长图（高>3×宽）：按原始分辨率纵向切片后逐片 OCR（保分辨率）
                 text_parts: list = []
                 low_conf = False
                 for chunk in _slice_long_rgb(arr):
@@ -150,6 +266,9 @@ class ImageTableAdapter:
                 text = "\n".join(text_parts).strip()
                 if not text:
                     low_conf = True
+            elif is_oversized:
+                # 超大图（任一边长 > 4000，且非"瘦长条"）：缩小检测 + 原图识别（方案一二合一，精度优先）
+                text, low_conf = _ocr_large_image(ocr, arr)
             else:
                 # 正常图片：传文件路径，PaddleOCR 3.x 内置 max_side_limit=4000 自动缩放
                 results = _ocr_predict(ocr, path)

@@ -23,7 +23,8 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, FileResponse
 
 from . import repos, tree, upload, markers, process as proc, progress
-from .models import RepoCreate, SettingsUpdate
+from .models import RepoCreate, SettingsUpdate, LLMSettings
+from . import llm_client
 import subprocess
 
 # 配置日志：确保 info 级别日志输出到控制台
@@ -285,13 +286,58 @@ def update_settings(body: SettingsUpdate):
     if body.repos_base is not None:
         repos.set_repos_base(body.repos_base)
         cur["repos_base"] = body.repos_base
+    if body.llm is not None:
+        cur["llm"] = body.llm.model_dump()
     _save_gui_settings(cur)
     return {
         "ocr_enabled": cur.get("ocr_enabled", False),
         "run_real_ocr": cur.get("run_real_ocr", False),
         "output_dir": cur.get("output_dir", ""),
         "repos_base": repos.get_repos_base(),
+        "llm": cur.get("llm", {}),
     }
+
+
+# ---- LLM 配置页（独立端点） ----
+def _load_llm_settings() -> dict:
+    """从 settings.json 读 llm 块，缺省回落 DEFAULTS。api_key 脱敏。"""
+    from dataproc.config import DEFAULTS
+    s = _load_gui_settings()
+    llm = dict(DEFAULTS.get("llm", {}))
+    llm.update(s.get("llm", {}) or {})
+    # 脱敏
+    if llm.get("api_key"):
+        llm["api_key"] = "<set>"
+    return llm
+
+
+@app.get("/settings/llm")
+def get_llm_settings():
+    return _load_llm_settings()
+
+
+@app.post("/settings/llm")
+def update_llm_settings(body: LLMSettings):
+    cur = _load_gui_settings()
+    cur["llm"] = body.model_dump()
+    _save_gui_settings(cur)
+    out = dict(body.model_dump())
+    if out.get("api_key"):
+        out["api_key"] = "<set>"
+    return out
+
+
+@app.post("/settings/llm/test")
+def test_llm_settings(body: LLMSettings):
+    """真实连通测试：复用 llm_client.test_connection。"""
+    cfg = body.model_dump()
+    try:
+        result = llm_client.test_connection(cfg)
+    except Exception as e:
+        result = {"ok": False, "latency_ms": 0, "models": [],
+                  "endpoint": "", "error": f"{type(e).__name__}: {e}",
+                  "kind": cfg.get("kind", "none")}
+    return result
 
 
 # SPA 兜底路由

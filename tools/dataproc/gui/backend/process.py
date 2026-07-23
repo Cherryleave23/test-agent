@@ -13,14 +13,19 @@ import time
 
 from dataproc.build import build_bundle, expand_selection
 
-from .repos import get_repo, _DEFAULT_BASE, SETTINGS_FILE
+from . import repos
+from .repos import get_repo
 from .markers import is_processed, mark_processed, clear_markers
 from . import progress
 
 
 def _load_gui_settings() -> dict:
-    """加载 GUI 设置（ocr_enabled/run_real_ocr/output_dir）。"""
-    sp = os.path.join(_DEFAULT_BASE, SETTINGS_FILE)
+    """加载 GUI 设置（ocr_enabled/run_real_ocr/output_dir/llm）。
+
+    动态读取 repos._DEFAULT_BASE（而非导入时副本），使自定义仓库根目录后
+    _apply_gui_env 仍能定位到正确的 settings.json。
+    """
+    sp = os.path.join(repos._DEFAULT_BASE, repos.SETTINGS_FILE)
     if os.path.isfile(sp):
         try:
             with open(sp, encoding="utf-8") as f:
@@ -30,9 +35,10 @@ def _load_gui_settings() -> dict:
     return {}
 
 
-def _apply_ocr_env():
-    """把 GUI 设置中的 OCR 配置注入到环境变量，供 dataproc.config.load_config() 读取。"""
+def _apply_gui_env():
+    """把 GUI 设置中的 OCR + LLM 配置注入到环境变量，供 dataproc.config.load_config() 读取。"""
     s = _load_gui_settings()
+    # --- OCR 注入（原有） ---
     if s.get("ocr_enabled"):
         os.environ["DATAPROC_OCR_ENABLED"] = "1"
     else:
@@ -41,6 +47,27 @@ def _apply_ocr_env():
         os.environ["RUN_REAL_OCR"] = "1"
     else:
         os.environ.pop("RUN_REAL_OCR", None)
+    # --- LLM 注入（新增，范式②抽取层将读取这些变量） ---
+    llm = s.get("llm") or {}
+    if llm.get("kind") and llm["kind"] != "none":
+        os.environ["DATAPROC_LLM_KIND"] = llm["kind"]
+        if llm.get("base_url"):
+            os.environ["DATAPROC_LLM_BASE_URL"] = llm["base_url"]
+        if llm.get("model"):
+            os.environ["DATAPROC_LLM_MODEL"] = llm["model"]
+        if llm.get("api_key"):
+            os.environ["DATAPROC_LLM_API_KEY"] = llm["api_key"]
+        if llm.get("temperature") is not None:
+            os.environ["DATAPROC_LLM_TEMPERATURE"] = str(llm["temperature"])
+        if llm.get("max_tokens") is not None:
+            os.environ["DATAPROC_LLM_MAX_TOKENS"] = str(llm["max_tokens"])
+    else:
+        os.environ.pop("DATAPROC_LLM_KIND", None)
+        os.environ.pop("DATAPROC_LLM_BASE_URL", None)
+        os.environ.pop("DATAPROC_LLM_MODEL", None)
+        os.environ.pop("DATAPROC_LLM_API_KEY", None)
+        os.environ.pop("DATAPROC_LLM_TEMPERATURE", None)
+        os.environ.pop("DATAPROC_LLM_MAX_TOKENS", None)
 
 
 def _make_progress_cb():
@@ -63,7 +90,7 @@ def process(name: str, selection: dict = None, base: str = None,
             force: bool = False, out_dir: str = None) -> dict:
     """同步处理（兼容旧接口，测试用）。"""
     repo_dir, meta = get_repo(name, base)
-    _apply_ocr_env()
+    _apply_gui_env()
     s = _load_gui_settings()
     actual_out = out_dir or meta.get("output_dir") or s.get("output_dir") or os.path.join(repo_dir, ".dataproc", "bundle")
 
@@ -105,7 +132,7 @@ def process_async(name: str, selection: dict = None, base: str = None,
         return {"error": "已有处理任务在运行", "status": cur}
 
     repo_dir, meta = get_repo(name, base)
-    _apply_ocr_env()
+    _apply_gui_env()
     s = _load_gui_settings()
     actual_out = out_dir or meta.get("output_dir") or s.get("output_dir") or os.path.join(repo_dir, ".dataproc", "bundle")
 

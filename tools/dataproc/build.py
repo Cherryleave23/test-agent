@@ -225,9 +225,11 @@ def _process_nontext(repo_dir, rel, full_path, kind, cfg, provider, known, state
         if st.fields:
             r = resolve(st.fields, known)
             product_uid = r["uid"]
+            # 范式②：规则与 LLM 在权威/描述字段上冲突 → 标 needs_review（不静默采用任一方）
+            prod_status = "needs_review" if st.needs_review else r["status"]
             prod_kind = "nutrition" if cls.get("product_category") == "营养品" else "milk"
             product_dict = ProductRecord(
-                kind=prod_kind, uid=r["uid"], status=r["status"], source_ref=rel,
+                kind=prod_kind, uid=r["uid"], status=prod_status, source_ref=rel,
                 resolved=r["resolved"], fields=st.fields,
             ).to_dict()
             if st.provider_used not in ("rule-only", "rule-only(fallback)"):
@@ -349,6 +351,7 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None,
             "hq_products": len(hq_products),
             "corpus_by_kind": _count_by_kind(corpus),
             "ocr_pending": sum(1 for c in corpus if c.get("meta", {}).get("ocr_pending")),
+            "needs_review": sum(1 for p in products if p.get("status") == "needs_review"),
             "skipped_files": len(unmatched),
         },
         "checksums": {

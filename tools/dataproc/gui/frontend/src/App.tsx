@@ -8,6 +8,7 @@ import LogPanel from "./components/LogPanel";
 import ProcessedPanel from "./components/ProcessedPanel";
 import PreviewPanel from "./components/PreviewPanel";
 import SettingsPanel from "./components/SettingsPanel";
+import LLMSettingsPanel from "./components/LLMSettingsPanel";
 
 interface RepoList {
   repos: { name: string; enterprise_id: string; namespace: string; output_dir?: string }[];
@@ -55,6 +56,7 @@ export default function App() {
     output_dir: "",
     repos_base: "",
   });
+  const [llmOpen, setLlmOpen] = useState(false);
   // 文件预览状态
   const [previewName, setPreviewName] = useState<string | null>(null);
   const [previewContent, setPreviewContent] = useState<string>("");
@@ -320,8 +322,14 @@ export default function App() {
       />
       <div className="msg-bar">
         <span className="msg">{msg}</span>
+        <button className="llm-nav-btn" onClick={() => setLlmOpen(true)}>
+          🧠 LLM 配置
+        </button>
         <SettingsPanel onSettingsChange={setSettings} />
       </div>
+      {llmOpen && (
+        <LLMSettingsPanel onClose={() => setLlmOpen(false)} />
+      )}
       <div className="main">
         <TreePanel
           tree={tree}

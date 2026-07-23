@@ -1,9 +1,10 @@
 """dataproc OCR 适配器包（零 src.* 依赖）。
 
-PaddleOCR 3.x API：
-  - PaddleOCR(engine="paddle_static", engine_config={"run_mode": "paddle"})
+官方 PP-OCRv6 运行方式（精度优先）：
+  - PaddleOCR(use_doc_orientation_classify=False, use_doc_unwarping=False,
+              use_textline_orientation=False)  → 默认 PP-OCRv6_medium + 官方 paddle 引擎
   - ocr.predict(image) → list[OCRResult]
-  - PPStructureV3 替代旧版 PPStructure
+  - PPStructureV3 替代旧版 PPStructure（当前表格识别已禁用，见 _ppstructure.py）
 
 - `PDFAdapter`：数字 PDF 用 pypdf 直抽文本层（无需重依赖，I7 默认绿）；扫描件（无文本层）
   走 PaddleOCR 3.x，表格走 PP-StructureV3（可选装）。

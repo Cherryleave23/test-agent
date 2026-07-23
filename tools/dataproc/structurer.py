@@ -12,13 +12,17 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .llms import ToolLLMProvider
 
 # 结构化字段白名单（MilkProduct 形状子集）
 FIELD_KEYS = ["brand", "name", "stage", "net_content", "age_range",
               "manufacturer", "reg_number"]
+
+# 权威字段（数字/编码）：OCR/规则为事实源，LLM 不得覆盖；冲突即 needs_review。
+# 其余为描述字段：LLM 优先补全（语义），规则为空才回退规则。
+_OCR_AUTH_FIELDS = ("reg_number", "net_content", "stage")
 
 
 @dataclass
@@ -27,6 +31,7 @@ class StructuringResult:
     provider_used: str = "rule-only"
     low_conf: bool = False
     parse_failed: bool = False
+    needs_review: bool = False  # 规则与 LLM 在权威/描述字段上冲突 → 需人工复核
 
 
 _SYSTEM = (
@@ -52,7 +57,7 @@ def _rule_extract(text: str) -> dict:
     m = re.search(r"制造商\s*[:：]\s*(\S+)", text)
     if m:
         f["manufacturer"] = m.group(1).strip()
-    m = re.search(r"国食注字\S+", text)
+    m = re.search(r"国食注字\s*\S+", text)
     if m:
         f["reg_number"] = m.group(0).strip()
     else:
@@ -67,13 +72,28 @@ def _rule_extract(text: str) -> dict:
     return f
 
 
-def _merge(rule: dict, llm: dict) -> dict:
-    out = dict(rule)
+def _fuse(rule: dict, llm: dict) -> Tuple[dict, list]:
+    """OCR 锚定融合（范式②核心）。
+
+    - 权威字段（reg_number/net_content/stage）：以规则(OCR)为准；规则空才用 LLM；
+      双方非空且不同 → 冲突，保留规则值并记入 conflicts。
+    - 描述字段（brand/name/manufacturer/age_range）：优先 LLM（语义补全）；
+      规则空才用规则；双方非空且不同 → 冲突，保留规则值（保守、不编造）并记 conflicts。
+    返回 (fields, conflicts)。
+    """
+    out: dict = {}
+    conflicts: list = []
     for k in FIELD_KEYS:
-        v = (llm.get(k) or "").strip()
-        if v:
-            out[k] = v
-    return out
+        rv = (rule.get(k) or "").strip()
+        lv = (llm.get(k) or "").strip()
+        if rv and lv and rv != lv:
+            conflicts.append(k)
+            out[k] = rv  # 冲突：保守保留规则(OCR)锚定值，交由人工复核
+        elif k in _OCR_AUTH_FIELDS:
+            out[k] = rv or lv  # 权威字段：规则优先
+        else:
+            out[k] = lv or rv  # 描述字段：LLM 优先补全
+    return out, conflicts
 
 
 def structure(text: str, provider: Optional[ToolLLMProvider] = None) -> StructuringResult:
@@ -93,8 +113,9 @@ def structure(text: str, provider: Optional[ToolLLMProvider] = None) -> Structur
     if parsed is None:
         return StructuringResult(fields=rule, provider_used=provider.label,
                                  low_conf=True, parse_failed=True)
-    merged = _merge(rule, parsed)
-    return StructuringResult(fields=merged, provider_used=provider.label, low_conf=False)
+    merged, conflicts = _fuse(rule, parsed)
+    return StructuringResult(fields=merged, provider_used=provider.label,
+                             low_conf=False, needs_review=bool(conflicts))
 
 
 def _extract_json(raw: str) -> Optional[dict]:

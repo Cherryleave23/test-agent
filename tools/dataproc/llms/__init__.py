@@ -13,7 +13,7 @@ from typing import Optional
 
 import requests
 
-from ..config import LLMConfig
+from ..config import LLMConfig, LLM_DEFAULT_BASE_URL
 
 
 class ToolLLMProvider(ABC):
@@ -93,4 +93,8 @@ def from_config(cfg: LLMConfig) -> Optional[ToolLLMProvider]:
         return OllamaProvider(cfg.base_url, cfg.model, cfg.api_key)
     if kind in ("openai", "openai_compat", "cloud"):
         return OpenAICompatProvider(cfg.base_url, cfg.model, cfg.api_key)
+    if kind == "lmstudio":
+        # OpenAI 兼容本地端点，默认 LMStudio 端口；用户可在 GUI 覆盖 base_url
+        base = cfg.base_url or LLM_DEFAULT_BASE_URL.get("lmstudio", "http://localhost:1234/v1")
+        return OpenAICompatProvider(base, cfg.model, cfg.api_key)
     raise ValueError(f"未知 LLM kind: {cfg.kind}")

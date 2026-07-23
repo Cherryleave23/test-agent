@@ -1,7 +1,9 @@
 """请求体模型。"""
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from dataproc.config import LLM_KINDS
 
 
 class RepoCreate(BaseModel):
@@ -17,8 +19,26 @@ class ProcessRequest(BaseModel):
     out_dir: Optional[str] = None  # 自定义输出目录
 
 
+class LLMSettings(BaseModel):
+    """LLM provider 配置（与 agent common.config.LLMConfig 字段对齐：复用模式）。"""
+    kind: str = "none"          # none | lmstudio | cloud | ollama（openai 视作 cloud 别名）
+    base_url: str = ""
+    model: str = ""
+    api_key: str = ""           # 仅云端需要；本地可空
+    temperature: float = 0.2
+    max_tokens: int = 1024
+
+    @field_validator("kind")
+    @classmethod
+    def _check_kind(cls, v: str) -> str:
+        if str(v).lower() not in LLM_KINDS:
+            raise ValueError(f"kind 必须是 {LLM_KINDS} 之一，收到 {v!r}")
+        return str(v).lower()
+
+
 class SettingsUpdate(BaseModel):
     ocr_enabled: Optional[bool] = None
     run_real_ocr: Optional[bool] = None
     output_dir: Optional[str] = None
     repos_base: Optional[str] = None  # 仓库根目录
+    llm: Optional[LLMSettings] = None  # 新增：LLM provider 子块

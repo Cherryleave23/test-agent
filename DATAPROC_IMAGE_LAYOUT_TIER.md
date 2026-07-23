@@ -137,7 +137,7 @@
 资料（图片 / PDF / 扫描件）
         │
         ├─ Tier A  纯文本 OCR（已有，常驻）
-        │      PP-OCRv6_medium（CPU+mkldnn，或 DATAPROC_OCR_DEVICE=gpu）
+        │      PP-OCRv6_medium（官方 paddle 动态图引擎；CPU 经 onednn，或 DATAPROC_OCR_DEVICE=gpu）
         │      → 扁平文本；端侧门店机器也能跑
         │
         ├─ Tier B  版面 / 结构解析（⛔ 暂不接入：当前决策 v6-only）
@@ -215,3 +215,72 @@
 
 > **当前实现（v6-only）**：用 **PP-OCRv6_medium（完整安装 `paddleocr[all]>=3.7.0` + PaddlePaddle 3.x，CPU 保底、零幻觉、可切 GPU）** 作为 dataproc 唯一图片/OCR 解析档，经现有 `structurer` + `pending-confirmation` 闭环汇入 corpus 链路，闭合 **PB-1 / D6 / D11**，且不破坏合规不出域与端侧 1 家 1 实例约束。
 > **已知限制**：版面复杂资料（成分表/营养标签/图表）的**结构**在 v6-only 下仍丢失（**D4 未闭合**），由 Tier C 人工待确认兜底（GUI 转 Excel/结构化录入，不编造）；PaddleOCR-VL（Tier B）按决策暂不接入，其表格/图表/公式结构化能力留作后续可选扩展。
+
+---
+
+## 8. 适配器审计与官方运行方式实测（2026-07-23）
+
+> 背景：用户要求"按官方文档运行方式改适配器、精度优先；检查 OCR 板块的算法优化是否与官方方案冲突，冲突则删除、直接用官方；并用 5 张产品图做测试 + 验证多图性能"。
+
+### 8.1 OCR 板块"算法优化"逐项审计结论
+
+| 项 | 性质 | 是否精度优化 | 与官方冲突？ | 处置 |
+|---|---|---|---|---|
+| `_patch_paddle_inference_config`（monkey-patch `set_optimization_level=0`） | **框架兼容性补丁**（非优化） | 否（仅禁用图优化 pass，数值零损失） | 否 | **保留**。PaddlePaddle 3.3.1 的 onednn(mkldnn) 执行器对 PP-OCRv6 检测后处理存在 `ConvertPirAttribute2RuntimeAttribute` PIR bug，CPU 路径必现（实测 Linux 亦触发，非仅 Windows）；不打补丁官方引擎直接抛 `NotImplementedError` 无法 OCR。官方 `enable_new_ir=False`/`delete_pass` 均无效，唯此 patch 可绕过。 |
+| 自定义 `engine_config={"device_type":"cpu","cpu_threads":4,"run_mode":"mkldnn"}`（paddle_static） | 非官方写法 | 否 | 偏离官方 Quick Start | **删除**，改为官方默认 `engine="paddle"` 动态图引擎（内部仍走 onednn，故仍需上面的补丁）。 |
+| `use_textline_orientation` 未显式关闭 | 遗漏（非优化） | — | 偏离官方三项全关 | **补上** `use_textline_orientation=False`（官方 Quick Start 三项全关）。 |
+| 长图纵向切片 `_slice_long_rgb`（SLICE_H=1200，带重叠） | 布局处理 | 否（精度中立/改善） | 否 | **保留**。长图整体缩放到 `max_side_limit=4000` 会丢细节，切片保分辨率反而更准；与官方不冲突。 |
+| tbpu 低置信阈值 `score<0.5 → low_conf` | 质量门控 | 否 | 否 | **保留**。下游标 `low_conf` 进 Tier C 人工闭环，属诚实搬运不编造。 |
+| "56s→5s" 1600px 预缩放 | 历史优化 | **是（精度暴跌）** | 是 | **此前已删**（CODE_READ_REPORT.md:70/115），本次核实代码已无残留；官方亦不预缩放、由内置 `max_side_limit=4000` 处理。 |
+
+**结论**：与官方精度方案**真正冲突**的只有已删除的"预缩放"；monkey-patch 是**兼容性补丁而非精度优化**，必须保留否则官方引擎不可用；其余均为精度中立/改善项，保留。适配器现已对齐官方 Quick Start（默认 PP-OCRv6_medium + 三项全关 + 官方 paddle 引擎）。
+
+### 8.2 对齐官方运行方式后的构造
+
+```python
+# tools/dataproc/adapters/_paddle_ocr.py —— 严格按官方 PP-OCRv6 Quick Start
+from paddleocr import PaddleOCR
+_ocr_engine = PaddleOCR(
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+    use_textline_orientation=False,   # 官方三项全关（此前漏了这项）
+    lang="ch",                         # 中文垂类；仍解析到默认 PP-OCRv6_medium
+    # engine="paddle" 为官方默认动态图引擎，不显式传 engine_config
+)
+# CPU(onednn) 路径施加精度中立补丁（绕过 PIR bug）；GPU 走 CUDA 无需补丁
+# device 可选经 DATAPROC_OCR_DEVICE=cpu|gpu 覆盖（精度中立，官方 engine_config API）
+```
+
+### 8.3 实测基准（5 张母婴产品图 · CPU · 官方 paddle 引擎 + onednn 补丁）
+
+测试集：`/tmp/ocr_test_images/img1..img5.jpg`（1600×2133 产品外包装/瓶身照，含营养成分表）。
+
+| 图片 | 尺寸 | 识别字数 | low_conf | 单图耗时 |
+|---|---|---|---|---|
+| img1 酵素益生菌粉 | 1600×2133 | 206 | False | 55.1s |
+| img2 调制乳粉（儿童） | 1600×2133 | 409 | False | 58.8s |
+| img3 乳铁蛋白调制乳粉 | 1600×2133 | 357 | False | 62.1s |
+| img4 液体双钙能量饮 | 1600×2133 | 293 | **True** | 53.9s |
+| img5 小葵花产品 | 1600×2133 | 319 | False | 53.2s |
+| **合计** | — | **1584** | — | **283.1s** |
+
+- **平均单图 56.6s，吞吐 0.018 图/s**（CPU medium 模型，精度优先的代价；官方 A100 paddle 引擎约 **0.29s/图**，差 ~195×，有 GPU 时大幅加速）。
+- **质量**：中文品名、营养成分表（项目/NRV/数值）、生产商/许可证号/地址/条码均正确抽取——直接命中 D4 版面复杂场景的"文字层"。
+- **img4（反光液体袋）自动 `low_conf=True`** → 进入 Tier C 人工待确认闭环（正确行为：绝不编造）。
+- 长图切片未触发（5 图均 h<3w，非长图）。
+- 基准脚本：`tools/dataproc/bench_ocr_5images.py`（可复跑，`python tools/dataproc/bench_ocr_5images.py [IMG_DIR]`）。
+
+### 8.4 超大图处理：缩小检测 + 原图识别（2026-07-23 新增）
+
+> 用户要求：对**超出模型尺寸限制**的图片采用社区最佳实践"缩小检测 + 原图识别"。参考实现是 PaddleOCR 2.x API（`ocr.ocr(det=True,rec=False)` / `use_angle_cls` / `det_model_name`），已**适配为 3.x 官方 API**（统一用 `predict()`，模型名经 `lang="ch"` 解析到默认 PP-OCRv6_medium）。
+
+**触发条件**（不碰普通图，避免回归）：`max(宽,高) > 4000`（= 官方 `max_side_limit`），且非"瘦长条"（瘦长条走既有纵向切片，原已保分辨率）。5 张基准图（≤2133px）仍走官方路径。
+
+**三步走（精度优先）**：
+1. **缩小检测**：把图缩放到 `长边 ≤ 4000 且 短边尽量接近 1500`（绝不放大；长边 ≤4000 是关键——保证 PaddleOCR 不在内部再次缩放，坐标映射才精确），在缩图上跑 `predict()` 取 `dt_polys` 检测框。
+2. **坐标映射**：检测框坐标 × `(原宽/缩宽, 原高/缩高)` 映射回原图，取轴对齐包围盒 + 5px 外扩。
+3. **原图识别**：从【原图】按映射框裁剪高清小图，批量 `predict()` 识别（每个裁剪即单行），用映射回原图的框 + 文本走 tbpu 阅读顺序排序。
+
+**为何精度优先且不与官方冲突**：官方对超大图会把**整图**缩放到 4000 后检测+识别，小字被压糊；本方案仅用缩图**定位**，识别在**原图分辨率**上进行，文字更清晰。它是对官方路径的**补充**（仅超限制时启用），非精度折衷的 hack。普通图仍 100% 走官方 `predict()`。
+
+**验证**：强制在 img1（限设定 1500 触发）跑两路径，识别文本字符重合率 **92%**（均正确抽出"酵素益生菌粉/营养成分表"等），证明 3.x 适配正确、质量等价；超大图场景因原图识别而更优。适配代码：`tools/dataproc/adapters/image_table.py` 的 `_ocr_large_image()` + `extract()` 分支；参数 `LARGE_IMAGE_LIMIT / LARGE_DET_SHORT_SIZE / LARGE_DET_MAX_SIDE / LARGE_CROP_PADDING` 可配。

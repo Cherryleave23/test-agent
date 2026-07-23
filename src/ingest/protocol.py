@@ -1,11 +1,15 @@
 """知识采集统一接口（MOD-knowledge-ingest，G1/C3）。
 
-统一协议：不同来源（PDF/图片表格/爬虫/Excel）归一为 KnowledgeRecord 再入库。
+> 架构红线：**agent 端不含爬虫**。agent 的 RAG / 商品库只消费数据处理工具（tools/dataproc）
+> 产出的 NDJSON bundle（见 `ingest.importer.load_bundle`）。爬虫是**独立获取工具**，其产出由
+> **用户手动**放入 dataproc「产品知识」后再入包，爬虫永不作为系统内部数据源。
+
+统一协议：不同来源（人工/运营录入的 markdown / 纯文本 / 已授权资料）归一为 KnowledgeRecord 再入库。
 - `KnowledgeRecord`：归一后的统一结构；`structured` 持有结构化产品对象（奶粉/营养品），
   `product_category` 打企业产品结构标签（供 kb 过滤/溯源）。
 - `IngestAdapter`（= `UnifiedKnowledgeSource` 别名）：每个采集源实现 `fetch() -> List[KnowledgeRecord]`。
 - `SeedAdapter` / `TextAdapter`：既有真实适配器（onboarding 灌数据 / 纯文本）。
-- 真实适配器（WebCrawler / MarkdownProduct / PDF / OCR）：见 `ingest/adapters.py`。
+- 真实适配器（MarkdownProduct / PDF / OCR）：见 `ingest/adapters.py`。
 """
 from __future__ import annotations
 
@@ -73,6 +77,7 @@ class TextAdapter:
         return [KnowledgeRecord(source_type="text", title=self.title or self.path, content=text)]
 
 
-# 真实适配器（WebCrawler / MarkdownProduct / PDF / OCR）统一在 ingest/adapters.py 实现。
+# 真实适配器（MarkdownProduct / PDF / OCR）统一在 ingest/adapters.py 实现。
 # PDF / 图片表格 适配器：仍按计划（crawl4ai + MinerU / PaddleOCR）接入，本 P1 不实现（见 PRD non-goals）。
+# 注意：爬虫（WebCrawler）不在 agent 侧——它是 dataproc 侧的独立获取工具，产出经处理后入包。
 
