@@ -21,6 +21,53 @@ from baby.models import BabyProfile
 
 DISCLAIMER = "（温馨提示：以上为产品信息参考，不构成医疗诊断，如有健康问题请咨询专业医生。）"
 
+# F3 意图→内容类型路由：根据问题语义把查询映射到知识 kind，使检索按内容类型加权/路由。
+# 设计：轻量关键词分类（确定性、无 LLM 依赖、可测试），后续可替换为 LLM 抽类型。
+# 三类知识：product_text（产品卖点/配方）、article（育儿科普）、ingredient（成分/营养）。
+_INTENT_KEYWORDS = {
+    "ingredient": ["成分", "营养", "含量", "配料", "DHA", "钙", "铁", "锌", "益生菌",
+                   "蛋白质", "脂肪", "碳水", "opo", "a2", "过敏", "乳糖", "维生素",
+                   "膳食纤维", "叶黄素", "牛磺酸", "胆碱", "益生元"],
+    "product_text": ["卖点", "配方", "段位", "品牌", "价格", "注册号", "国食注字",
+                     "推荐", "主打", "产品", "系列", "规格", "包装"],
+    "article": ["辅食", "喂养", "睡眠", "育儿", "月龄", "早教", "护理", "注意事项",
+                "怎么喂", "如何", "为什么", "什么时候", "禁忌", "护理"],
+}
+
+
+def classify_intent(query: str) -> Optional[str]:
+    """把用户问题归类为知识 kind（product_text/article/ingredient），无明确意图返回 None。
+
+    计数命中取最高频类型；平局时优先级 ingredient > product_text > article
+    （成分问题答错代价最高，优先保成分召回）。
+    """
+    low = (query or "").lower()
+    scores = {k: 0 for k in _INTENT_KEYWORDS}
+    for kind, kws in _INTENT_KEYWORDS.items():
+        for kw in kws:
+            if kw.lower() in low:
+                scores[kind] += 1
+    best = max(scores.values())
+    if best == 0:
+        return None
+    # 取命中数最高者；并列时按优先级
+    order = ["ingredient", "product_text", "article"]
+    for kind in order:
+        if scores[kind] == best:
+            return kind
+    return None
+
+
+def intent_kind_weight(query: str) -> Optional[dict]:
+    """F3 加权：检测到明确意图时，对该 kind 乘性提权（1.8），其余保持 1.0。
+
+    仅加权、不剔除——避免意图误判导致相关结果被排除，召回更稳健。
+    """
+    kind = classify_intent(query)
+    if kind is None:
+        return None
+    return {kind: 1.8}
+
 
 @dataclass
 class Answer:
@@ -116,7 +163,11 @@ class Agent:
         history = history or []
         # 1) 检索（Fix#1：用档案上下文增强查询，提升命中率）
         enriched_query = self._enrich_query(query, baby_profile)
-        hits = self.store.retrieve(enriched_query, self.cfg.enterprise_id, top_k=5)
+        # F3 路由：按问题语义把查询映射到知识 kind，检索侧按 kind 加权/路由
+        # （之前 retrieve 从不传 kind_filter/kind_weight，F3 在端到端是假绿）。
+        kind_weight = intent_kind_weight(enriched_query) or intent_kind_weight(query)
+        hits = self.store.retrieve(enriched_query, self.cfg.enterprise_id, top_k=5,
+                                  kind_weight=kind_weight)
         # 2) 拼接上下文
         context = self._build_context(hits)
         # 3) 企业 prompt（含可选用户约束块 / 宝宝档案块）

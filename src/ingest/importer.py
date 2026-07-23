@@ -71,6 +71,12 @@ def _load_corpus(store: KnowledgeStore, enterprise_id: str, rec: dict,
     title = rec.get("title", "")
     content = rec.get("content", "")
     meta = dict(rec.get("meta", {}))
+    # F3：dataproc 把内容类型 kind（product_text/article/ingredient）写在 corpus.ndjson
+    # 顶层字段，_add_corpus 仅从 meta.kind 取值；此处把顶层 kind 注入 meta，使 Chroma
+    # 元数据带正确 kind，检索侧 kind_filter/kind_weight 才能按内容类型路由/加权。
+    kind = rec.get("kind", "")
+    if kind:
+        meta["kind"] = kind
     product_uid = rec.get("product_uid")
     product_id = uid_to_pid.get(product_uid) if product_uid else None
     if part == "hq_kb":

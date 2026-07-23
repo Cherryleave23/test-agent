@@ -251,10 +251,16 @@ def create_app(cfg: EnterpriseConfig) -> FastAPI:
     @app.get("/api/database/status", dependencies=[Depends(_verify_token)])
     def db_status():
         _get_store()  # 确保 schema 已初始化
+        # D3 修复：按本企业 enterprise_id 收敛计数，杜绝跨租户规模泄露
+        # （原语句无 WHERE enterprise_id，会泄露同库其他租户/HQ 的数据量）。
+        ent = cfg.enterprise_id
         with db_tx(cfg.db_path) as conn:
-            corpus_count = conn.execute("SELECT COUNT(*) FROM corpus").fetchone()[0]
-            products_count = conn.execute("SELECT COUNT(*) FROM products_milk").fetchone()[0]
-            nutrition_count = conn.execute("SELECT COUNT(*) FROM products_nutrition").fetchone()[0]
+            corpus_count = conn.execute(
+                "SELECT COUNT(*) FROM corpus WHERE enterprise_id=?", (ent,)).fetchone()[0]
+            products_count = conn.execute(
+                "SELECT COUNT(*) FROM products_milk WHERE enterprise_id=?", (ent,)).fetchone()[0]
+            nutrition_count = conn.execute(
+                "SELECT COUNT(*) FROM products_nutrition WHERE enterprise_id=?", (ent,)).fetchone()[0]
         inbox = os.environ.get("BUNDLE_INBOX_DIR", "")
         return {
             "db_path": cfg.db_path,
