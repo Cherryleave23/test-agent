@@ -94,6 +94,31 @@ def expand_selection(repo_dir: str, selection: Optional[dict]) -> List[str]:
     return out
 
 
+def _all_repo_files(repo_dir: str) -> List[str]:
+    """仓库内全部文件（相对路径），跳过内部目录 .dataproc。"""
+    out: List[str] = []
+    for root, _dirs, files in os.walk(repo_dir):
+        if ".dataproc" in root.split(os.sep):
+            continue
+        for fn in files:
+            full = os.path.join(root, fn)
+            out.append(os.path.relpath(full, repo_dir).replace(os.sep, "/"))
+    return sorted(out)
+
+
+def _unmatched_files(repo_dir: str) -> List[str]:
+    """不在任何标准总文件夹下的文件（真人拖错位置/命名不符），build 会静默忽略。
+
+    返回这些文件供调用方给出可见反馈（避免「资料凭空丢失」而无任何提示）。
+    """
+    prefixes = tuple(t + "/" for t in TOP_FOLDERS)
+    out = []
+    for rel in _all_repo_files(repo_dir):
+        if not rel.startswith(prefixes):
+            out.append(rel)
+    return out
+
+
 # ---------- 内容解析（不 import src.*） ----------
 def _parse_md_product(path: str):
     with open(path, encoding="utf-8", errors="ignore") as f:
@@ -149,6 +174,11 @@ def _process_nontext(repo_dir, rel, full_path, kind, cfg, provider, known, state
         m = {"source": (ext.lstrip(".") or "file"), "path": rel, "ocr_pending": True}
         if meta_extra:
             m.update(meta_extra)
+        # A-反馈：OCR 未启用/缺依赖导致内容被延迟（占位为空），必须给操作者可见警告，
+        # 否则该文件看似「已处理」实则无内容进入语料，造成静默数据损失。
+        logger.warning(
+            "OCR 未启用或依赖缺失，文件内容延迟处理（已写入空占位 ocr_pending，"
+            "非真实内容）：%s", rel)
         return "", m, None, None
 
     if ext == ".pdf":
@@ -291,6 +321,13 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None,
             if progress_cb:
                 progress_cb("done", rel)
 
+    # 反馈：标准总文件夹之外的文件（真人拖错位置/文件夹命名不符）会被静默忽略，
+    # 此处显式告警并记入 manifest.skipped_files，避免「资料凭空丢失」却无任何提示。
+    unmatched = _unmatched_files(repo_dir)
+    for rel in unmatched:
+        logger.warning("文件不在标准总文件夹（%s）下，已被忽略、未进入 bundle：%s",
+                       "/".join(TOP_FOLDERS), rel)
+
     os.makedirs(out_dir, exist_ok=True)
 
     def _write(name: str, rows: List[dict]) -> None:
@@ -311,11 +348,14 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None,
             "products": len(products), "corpus": len(corpus),
             "hq_products": len(hq_products),
             "corpus_by_kind": _count_by_kind(corpus),
+            "ocr_pending": sum(1 for c in corpus if c.get("meta", {}).get("ocr_pending")),
+            "skipped_files": len(unmatched),
         },
         "checksums": {
             n: _sha_file(os.path.join(out_dir, n))
             for n in ("products.ndjson", "corpus.ndjson", "hq_products.ndjson")
         },
+        "skipped_files": unmatched,
         "structuring_provider": state["structuring_provider"],
     }
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:

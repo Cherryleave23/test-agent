@@ -174,6 +174,19 @@ class Agent:
         messages = self._build_messages(query, context, history, constraints, baby_block)
         # 4) 调用 LLM
         reply = await self.provider.complete(messages, retrieved_hits=hits)
+        # D8 合规护栏：待确认（注册号/批准文号待填）商品不向客户主动推荐。
+        # 命中里若含 pending 商品且回复中实际点名了该商品，则附合规提示，
+        # 避免员工把未注册婴幼儿食品/保健品直接推荐给客户。
+        pending_name = None
+        for h in hits:
+            nm = h.meta.get("name") or h.title
+            if h.meta.get("pending") and nm and nm in reply:
+                pending_name = nm
+                break
+        if pending_name is not None:
+            reply = (reply.rstrip("。") +
+                     f"。【合规提示：{pending_name} 注册号待确认，"
+                     "暂不建议主动向客户推荐，请先在企业后台完成确认。】")
         # 5) 引用
         citations = [
             {"index": i + 1, "title": (h.meta.get("name") or h.title),

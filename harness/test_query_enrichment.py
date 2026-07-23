@@ -92,8 +92,10 @@ class _SpyStore:
     def __init__(self):
         self.captured_query = ""
 
-    def retrieve(self, query, ent_id, top_k=5):
+    def retrieve(self, query, ent_id, top_k=5, kind_filter=None, kind_weight=None):
         self.captured_query = query
+        self.captured_kind_weight = kind_weight
+        self.captured_kind_filter = kind_filter
         return []  # 空命中，answer 会走防幻觉路径
 
 

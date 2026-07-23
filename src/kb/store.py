@@ -325,9 +325,12 @@ class KnowledgeStore:
                  p.ingredients, p.nutrition, p.highlights),
             )
             pid = cur.lastrowid
+            # D8：把「待确认」状态写入分块元数据，供检索命中后由 agent 端合规提示
+            # （奶粉以注册号 reg_number 空为待确认；空字符串/None 均视为待确认）。
+            pending = not (p.reg_number or "").strip()
             for idx, (label, text) in enumerate(p.to_chunks()):
                 self._add_corpus(cur, "b_milk", p.enterprise_id, pid, p.name, text,
-                                 p.meta(), chunk=label, chunk_index=idx)
+                                 {**p.meta(), "pending": pending}, chunk=label, chunk_index=idx)
             conn.commit()
             return pid
 
@@ -344,9 +347,11 @@ class KnowledgeStore:
                  p.ingredients, p.nutrition, p.highlights, p.cautions),
             )
             pid = cur.lastrowid
+            # D8：营养品以待批准文号 health_license 空为待确认，写入分块元数据。
+            pending = not (p.health_license or "").strip()
             for idx, (label, text) in enumerate(p.to_chunks()):
                 self._add_corpus(cur, "b_nutrition", p.enterprise_id, pid, p.name, text,
-                                 p.meta(), chunk=label, chunk_index=idx)
+                                 {**p.meta(), "pending": pending}, chunk=label, chunk_index=idx)
             conn.commit()
             return pid
 

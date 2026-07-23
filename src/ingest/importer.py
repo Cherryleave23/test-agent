@@ -66,7 +66,7 @@ def _load_product(store: KnowledgeStore, enterprise_id: str, rec: dict) -> Optio
 
 
 def _load_corpus(store: KnowledgeStore, enterprise_id: str, rec: dict,
-                 uid_to_pid: dict) -> None:
+                 uid_to_pid: dict, uid_to_pending: dict = None) -> None:
     part = rec.get("part", "b_kb")
     title = rec.get("title", "")
     content = rec.get("content", "")
@@ -79,6 +79,10 @@ def _load_corpus(store: KnowledgeStore, enterprise_id: str, rec: dict,
         meta["kind"] = kind
     product_uid = rec.get("product_uid")
     product_id = uid_to_pid.get(product_uid) if product_uid else None
+    # D8：绑定到具体商品（product_text）时，把该商品「待确认」状态写入 meta，
+    # 使该分块在检索命中后能被 agent 识别为未注册商品，给出合规提示。
+    if product_id is not None and uid_to_pending and product_uid in uid_to_pending:
+        meta["pending"] = bool(uid_to_pending[product_uid])
     if part == "hq_kb":
         store.add_hq_knowledge(title, content, meta)
     else:
@@ -104,6 +108,9 @@ def load_bundle(bundle_dir, store: KnowledgeStore, enterprise_id: str) -> dict:
 
     stats = {"products": 0, "hq_products": 0, "corpus": 0, "errors": []}
     uid_to_pid: dict = {}
+    # D8：product_uid → 是否待确认（注册号/批准文号空），供 product_text 语料打标，
+    # 使检索命中后能由 agent 端给出合规提示（不向客户主动推荐未注册商品）。
+    uid_to_pending: dict = {}
 
     # 1) 结构化产品（先建，拿到 pid 供语料绑定）
     products_path = os.path.join(bundle_dir, "products.ndjson")
@@ -113,6 +120,8 @@ def load_bundle(bundle_dir, store: KnowledgeStore, enterprise_id: str) -> dict:
                 pid = _load_product(store, enterprise_id, line)
                 if pid is not None and line.get("uid"):
                     uid_to_pid[line["uid"]] = pid
+                    reg = (line.get("fields") or {}).get("reg_number")
+                    uid_to_pending[line["uid"]] = not (reg or "").strip()
                 stats["products"] += 1
             except Exception as e:  # noqa: BLE001
                 stats["errors"].append(
@@ -134,7 +143,7 @@ def load_bundle(bundle_dir, store: KnowledgeStore, enterprise_id: str) -> dict:
     if os.path.isfile(corpus_path):
         for line in _read_lines(corpus_path):
             try:
-                _load_corpus(store, enterprise_id, line, uid_to_pid)
+                _load_corpus(store, enterprise_id, line, uid_to_pid, uid_to_pending)
                 stats["corpus"] += 1
             except Exception as e:  # noqa: BLE001
                 stats["errors"].append(f"corpus {line.get('title', '?')}: {e}")
