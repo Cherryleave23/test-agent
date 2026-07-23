@@ -72,7 +72,7 @@
 | MOD-baby-profile | **partial（P2 + P2-v2 已落地）** | 客户 1→N 宝宝 + 每轮消歧 + 混合式建档安全网 + 主动归档 + 焦点注入；pending 防污染 / 消歧失败熔断 / 跨会话写锁 / 待确认清理 / 焦点稳定结果缓存 / Prompt Caching 稳定前缀 + ORDER BY + 预热；**schema v2: `birth_date`/`gestational_weeks`/`medical_history`/`feeding_history` 结构化字段 + SQL 自动迁移**；**终极实战 harness: 5 宝宝 34 条碎片化信息随机归档 + 交叉提问验收（P30-P39）** |
 | MOD-wechat | partial | iLink Bot API 网关 + 约束/档案接线已落地 |
 | MOD-deploy | **partial（P1 + P0 安全已落地）** | **Windows 直装 + 三层依赖分层 + `configure.ps1` 配置向导 + 环境变量覆盖 + `PluginManager` 可插拔模型路径** + **P0 安全**：密钥环境变量化(`from_yaml_with_env`+env_file+secret_scan) / 出入站白名单(`egress.EgressPolicy`) / 健康数据加密(`crypto.Vault`) 均已落地并配 harness |
-| MOD-admin | **partial（5 大板块已落地）** | **WebUI 管理后台**：FastAPI + 原生 HTML/JS（零前端工具链） / LLM 配置查看修改（写 yaml） / 数据库加载（触发 scan_and_load + pending 商品管理） / 门店与员工 CRUD / 微信网关绑定（token 脱敏） / 宝宝档案只读查看（跨员工列表 + 详情）+ **数据转化补全**: PP-Structure 表格识别（`from paddleocr import PPStructure`）+ `classifier.py`（ptype/product_category 推断） |
+| MOD-admin | **partial（5 大板块已落地）** | **WebUI 管理后台**：FastAPI + 原生 HTML/JS（零前端工具链） / LLM 配置查看修改（写 yaml） / 数据库加载（触发 scan_and_load + pending 商品管理） / 门店与员工 CRUD / 微信网关绑定（token 脱敏） / 宝宝档案只读查看（跨员工列表 + 详情）+ **数据转化补全**: PP-OCRv6_medium 文本 OCR（`paddleocr[all]>=3.7.0`，完整版）+ `classifier.py`（ptype/product_category 推断）；表格识别走可选 Tier B（PaddleOCR-VL，见 `DATAPROC_IMAGE_LAYOUT_TIER.md`），原 PP-Structure 已禁用（见 `tools/dataproc/adapters/_ppstructure.py`） |
 
 ## 端侧部署
 
@@ -101,9 +101,22 @@
 
 **依赖三层分层策略：**
 
-- **Tier 1 — 稳定大文件（按 URL 拉取）**：torch CPU (~800MB)、sentence-transformers、bge 模型权重 (~100MB)。
+- **Tier 1 — 稳定大文件（按 URL 拉取）**：torch CPU (~800MB)、sentence-transformers、bge 模型权重 (~100MB)、
+  paddlepaddle + paddleocr（OCR，PP-OCRv6_medium，可选装）。
   迭代缓慢（半年一更）、体积大。不在安装包中捆绑，由 `configure.ps1` 按 `deploy/dependency-manifest.yaml`
   声明的 URL 在配置阶段拉取。支持：PyPI 镜像选择、HuggingFace 国内镜像（hf-mirror.com）、离线 U 盘导入。
+
+**OCR（可选 Tier1）安装与开启：** 产品图/扫描件/规格表的文字抽取依赖 PaddleOCR。两步安装（先框架后库）：
+
+```bash
+# 第一步：基础框架 PaddlePaddle（无 NVIDIA 显卡用 paddlepaddle，有显卡用 paddlepaddle-gpu；需 3.x，建议 3.2.1+）
+pip install "paddlepaddle>=3.0.0"          # CPU 版；GPU 版按 CUDA 选 paddlepaddle-gpu
+# 第二步：PaddleOCR 完整版（含全部功能与依赖，便于后续扩展 PP-OCRv6 / PaddleOCR-VL）
+pip install "paddleocr[all]>=3.7.0"        # 要求 Python>=3.9
+```
+
+开启：`DATAPROC_OCR_ENABLED=1 RUN_REAL_OCR=1`；medium 模型在 CPU（mkldnn）约 50s/图，有 GPU 时设 `DATAPROC_OCR_DEVICE=gpu` 大幅加速。
+未安装时自动降级为 `ocr_pending` 占位（不编造、不崩溃）。详见 `tools/dataproc/adapters/_paddle_ocr.py`。
 - **Tier 2 — 小依赖（捆绑在安装包）**：pydantic、pyyaml、chromadb、httpx（共 ~60MB）。
 - **Tier 3 — 易变代码（可插拔）**：`src/` 应用源码、`enterprise.yaml` 配置。升级时只需替换 `app/` 目录。
 

@@ -4,8 +4,10 @@
 
 # OCR Tier1：端侧可选装。默认关闭，保证纯文本/结构化源在无 PaddleOCR 环境也能跑。
 ocr_enabled: false
-# 真正调用 PaddleOCR（需已 pip install paddlepaddle paddleocr）。否则扫描件/图片保持
-# ocr_pending 占位、不触发重依赖。也可用 RUN_REAL_OCR=1 临时开启。
+# 真正调用 PaddleOCR（需已装 PaddlePaddle 3.x + paddleocr[all]>=3.7.0，Python>=3.9）。
+# 当前选用 PP-OCRv6_medium（精度优先；CPU mkldnn 约 50s/图，有 GPU 经
+# DATAPROC_OCR_DEVICE=gpu 大幅加速）。否则扫描件/图片保持 ocr_pending 占位、不触发重依赖。
+# 也可用 RUN_REAL_OCR=1 临时开启。
 run_real_ocr: false
 
 # 工具自带 LLM provider（仅用于结构化抽取，禁止改写 OCR 事实）。默认 none = 仅规则抽取。

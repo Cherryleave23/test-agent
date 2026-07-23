@@ -48,7 +48,9 @@ wheels:
   # 由 DATAPROC_OCR_ENABLED=1 + RUN_REAL_OCR=1 开启；未安装时默认降级为 ocr_pending
   # 占位（不编造、不崩溃）。paddlepaddle 体积大，configure.ps1 会询问是否拉取。
   - name: paddlepaddle
-    pip: "paddlepaddle>=2.6.0,<3.0.0"
+    # PP-OCRv6 需 PaddlePaddle 3.x（建议 3.2.1+，与 PaddleOCR-VL 对齐）；
+    # 有 NVIDIA 显卡用 paddlepaddle-gpu，无显卡用 paddlepaddle（CPU）。
+    pip: "paddlepaddle>=3.0.0"
     url: ""
     dest: "wheels/"
     size_mb: 400
@@ -56,7 +58,9 @@ wheels:
     optional: true
 
   - name: paddleocr
-    pip: "paddleocr>=2.7.0,<3.0.0"
+    # 完整版 paddleocr[all]（含全部功能与依赖，便于后续扩展 PP-OCRv6 / PaddleOCR-VL）。
+    # PP-OCRv6 要求 paddleocr>=3.7.0；Python>=3.9。
+    pip: "paddleocr[all]>=3.7.0"
     url: ""
     dest: "wheels/"
     size_mb: 30

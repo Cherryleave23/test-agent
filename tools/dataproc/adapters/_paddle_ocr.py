@@ -1,25 +1,29 @@
 """共享 PaddleOCR 引擎单例：线程安全双重检查锁定。
 
-PaddleOCR 3.7 + PP-OCRv6_small 配置：
+PaddleOCR 3.7 + PP-OCRv6_medium 配置（medium 为决策选定档，精度优先）：
 
-模型选择（PP-OCRv6，PaddleOCR 3.7 默认）：
-  - PP-OCRv6_small_det: 检测 Hmean 84.1%，9.6MB
-  - PP-OCRv6_small_rec: 识别精度 81.3%，20.4MB
+模型选择（PP-OCRv6，PaddleOCR 3.7，需 paddleocr>=3.7.0 + PaddlePaddle 3.x）：
+  - PP-OCRv6_medium_det: 检测 Hmean 86.2%，~17MB
+  - PP-OCRv6_medium_rec: 识别精度 83.2%，~17MB
   - 单模型支持中、英、日及 46 种拉丁语系共 50 种语言
+  - 对比 small（det Hmean 84.1% / rec 81.3%）：medium 精度更高，代价是更慢、模型更大
 
 推理引擎配置（官方 engine_config API）：
-  - engine="paddle_static" + run_mode="mkldnn" — oneDNN CPU 加速
+  - engine="paddle_static" + run_mode="mkldnn" — oneDNN CPU 加速（默认，端侧门店机无 GPU 也能跑）
+  - device 可经环境变量 DATAPROC_OCR_DEVICE 切换：cpu（默认，mkldnn）/ gpu（run_mode=paddle）
   - 官方 enable_new_ir=False / delete_pass 在 Windows 上无法绕过 PIR bug，
     需要 monkey-patch set_optimization_level=0
   - 参考: https://www.paddleocr.ai/latest/version3.x/inference_deployment/local_inference/inference_engine.html
 
-性能基准（5712x4284 产品图片）：
-  v6_small + 文件路径 + mkldnn: ~10s, 110 chars（当前配置）
-  v6_medium + 文件路径 + mkldnn: ~50s, 112 chars（精度略高但太慢）
-  v5_mobile + 文件路径 + mkldnn: ~8s, 103 chars（精度略低）
+性能基准（5712x4284 产品图片，mkldnn）：
+  v6_medium + 文件路径 + mkldnn: ~50s, 112 chars（当前配置，精度优先；有 GPU 时大幅加速）
+  v6_small  + 文件路径 + mkldnn: ~10s, 110 chars（更快但精度略低，已弃用）
+  v5_mobile + 文件路径 + mkldnn: ~8s, 103 chars（精度更低）
 
-注意：必须传文件路径给 predict()，不能预缩放图片（预缩放到 1600px 会导致精度暴跌）。
-PaddleOCR 3.x 内置 max_side_limit=4000 的自动缩放。
+注意：
+  - 必须传文件路径给 predict()，不能预缩放图片（预缩放到 1600px 会导致精度暴跌）。
+    PaddleOCR 3.x 内置 max_side_limit=4000 的自动缩放。
+  - medium 在 CPU 上约 50s/图，端侧批量处理需预留时长或启用 GPU；纯文本/小图更快。
 """
 from __future__ import annotations
 
@@ -69,8 +73,9 @@ _ocr_lock = threading.Lock()
 def get_paddle_ocr():
     """获取 PaddleOCR 引擎单例（线程安全，双重检查锁定）。
 
-    配置：PP-OCRv6_small + mkldnn + patch
-    单张图片 OCR 约 10 秒（传文件路径，PaddleOCR 自动缩放到 4000px）。
+    配置：PP-OCRv6_medium + mkldnn（CPU 默认）/ paddle（GPU 可切）
+    单张图片 OCR 约 50 秒（medium + CPU mkldnn，传文件路径，PaddleOCR 自动缩放到 4000px）；
+    有 GPU 时大幅加速。device 经 DATAPROC_OCR_DEVICE 切换（cpu/gpu，默认 cpu）。
     """
     global _ocr_engine, _ocr_initialized
     if _ocr_initialized:
@@ -86,28 +91,34 @@ def get_paddle_ocr():
             _ocr_engine = None
             return _ocr_engine
 
-        # mkldnn 需要 patch 才能在 Windows 上工作
-        _patch_paddle_inference_config()
+        # 设备选择：cpu（默认，mkldnn 加速）/ gpu（run_mode=paddle）
+        device = (os.environ.get("DATAPROC_OCR_DEVICE") or "cpu").lower()
+        if device == "gpu":
+            engine_config = {"device_type": "gpu", "run_mode": "paddle"}
+        else:
+            # mkldnn 需要 patch 才能在 Windows 上工作
+            _patch_paddle_inference_config()
+            engine_config = {
+                "device_type": "cpu",
+                "cpu_threads": 4,
+                "run_mode": "mkldnn",
+            }
 
         try:
             _ocr_engine = PaddleOCR(
                 lang="ch",
                 engine="paddle_static",
-                engine_config={
-                    "device_type": "cpu",
-                    "cpu_threads": 4,
-                    "run_mode": "mkldnn",
-                },
-                # PP-OCRv6_small：PaddleOCR 3.7 最新模型，兼顾精度与速度
-                text_detection_model_name="PP-OCRv6_small_det",
-                text_recognition_model_name="PP-OCRv6_small_rec",
+                engine_config=engine_config,
+                # PP-OCRv6_medium：决策选定档，精度优先（检测 86.2% / 识别 83.2%）
+                text_detection_model_name="PP-OCRv6_medium_det",
+                text_recognition_model_name="PP-OCRv6_medium_rec",
                 # 关闭不需要的模块（产品图片不需要方向分类/矫正）
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
             )
             logger.info(
                 "PaddleOCR 3.x 引擎初始化成功 "
-                "(PP-OCRv6_small + mkldnn, 方向分类=OFF)"
+                "(PP-OCRv6_medium + %s, 方向分类=OFF)", device
             )
         except TypeError:
             # 兼容：如果参数不支持，退回基础构造

@@ -81,7 +81,7 @@
 
 1. **三档硬件定位（与端侧约束强相关）**
    - `tiny`（1.5M）→ **边缘/IoT**；`small`（~9.6MB 检测 + 20.4MB 识别）→ **移动端/桌面**；`medium`（34.5M）→ **服务端**。
-   - 这意味着同一套 PP-OCRv6 代码可下探到门店低配机（tiny/small，CPU 即可），上探到 HQ 服务器（medium，GPU 加速 2.37×），**无需换引擎**。
+   - 这意味着同一套 PP-OCRv6 代码可下探到门店低配机（tiny/small/medium，CPU 即可，medium 更慢约 50s/图），上探到 HQ 服务器（medium，GPU 加速 2.37×），**无需换引擎**。
 
 2. **零幻觉转录（合规敏感资料的关键优势）**
    - 官方实测对比：PP-OCRv6 **忠实复现图面文字**；而 Gemini-3.1-Pro / GPT-5.5 / Qwen3-VL-235B 等通用 VLM 会基于语言先验**产生"幻觉性纠错"**（把看到的字改成"它认为对的字"）。
@@ -135,7 +135,7 @@
 资料（图片 / PDF / 扫描件）
         │
         ├─ Tier A  纯文本 OCR（已有，常驻）
-        │      PP-OCRv6_small（CPU+mkldnn）
+        │      PP-OCRv6_medium（CPU+mkldnn，或 DATAPROC_OCR_DEVICE=gpu）
         │      → 扁平文本；端侧门店机器也能跑
         │
         ├─ Tier B  版面 / 结构解析（新增，可选装，需 GPU/自托管）
@@ -173,7 +173,7 @@
 ## 5. 落地路径（分阶段，每步带回归）
 
 ### 阶段 0 — 现状固化（已完成）
-- PP-OCRv6_small 文本 OCR 常驻（`_paddle_ocr.py`）；PB-1 的 `ocr_pending` WARN + manifest 计数已落地。
+- PP-OCRv6_medium 文本 OCR 常驻（`_paddle_ocr.py`）；PB-1 的 `ocr_pending` WARN + manifest 计数已落地。
 
 ### 阶段 1 — 新增 Tier B 适配器（可选装，默认 OFF）
 - 新增 `tools/dataproc/adapters/_paddle_ocr_vl.py`：
