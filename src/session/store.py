@@ -63,6 +63,11 @@ class SessionStore:
                     session_id INTEGER PRIMARY KEY,
                     fails INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS session_baby_capability (
+                    session_id INTEGER PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'unknown'
+                    -- unknown | available | unavailable（unavailable: LLM 不支持结构化输出，如 mock）
+                );
                 """
             )
             conn.commit()
@@ -192,3 +197,35 @@ class SessionStore:
                 (session_id,),
             )
             conn.commit()
+
+    def set_baby_capability(self, session_id: int, status: str) -> bool:
+        """记录会话级宝宝能力状态（available/unavailable）。
+
+        返回 True 表示「状态首次变为该值」（用于「仅主动告警一次」），
+        否则 False。PB-3：让「宝宝能力是否可用」成为可观测的会话状态，
+        而非仅在连续失败后才事后 WARNING。
+        """
+        with connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT status FROM session_baby_capability WHERE session_id=?",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row and row["status"] == status:
+                return False
+            cur.execute(
+                "INSERT INTO session_baby_capability(session_id, status) VALUES(?, ?) "
+                "ON CONFLICT(session_id) DO UPDATE SET status=excluded.status",
+                (session_id, status),
+            )
+            conn.commit()
+            return True
+
+    def get_baby_capability(self, session_id: int) -> str:
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM session_baby_capability WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+        return row["status"] if row else "unknown"

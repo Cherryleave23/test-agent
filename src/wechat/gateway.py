@@ -80,7 +80,17 @@ class WechatGateway:
             # ---- MOD-baby-profile：每轮消歧 + 建档安全网 + 主动归档 + 设焦点 ----
             baby_block = None
             baby_profile_obj = None  # A2 修复：传给 agent.answer 用于检索查询融合
-            if self.cfg.baby_profile_enabled and self.baby_store is not None:
+            # PB-3 修复：先判定「宝宝能力是否可用」——
+            # 仅当配置开启、宝宝库存在、且 LLM provider 能返回结构化 JSON（非 mock）时，
+            # 才走 LLM 消歧/建档。否则（如默认 mock 模式）结构性无法做宝宝建档，跳过 LLM
+            # 调用、不累加熔断计数、不静默降级，仅做一次主动告警并记录会话级能力状态，
+            # 避免「开箱即丢失核心能力」且毫无提示。
+            baby_capable = (
+                self.cfg.baby_profile_enabled and self.baby_store is not None
+                and getattr(self.agent.provider, "supports_structured", True)
+            )
+            if baby_capable:
+                self.session.set_baby_capability(sid, "available")
                 focus_before = self.session.get_focus_baby(sid)
                 fails = self.session.get_resolution_fails(sid)
                 if fails >= BABY_RESOLUTION_FAIL_THRESHOLD:
@@ -127,6 +137,14 @@ class WechatGateway:
                             notes=stored.notes,  # 自由文本保留
                         )
                         self.session.save_constraints(sid, stored)
+            else:
+                # PB-3：宝宝能力不可用（如 mock provider）→ 跳过 LLM 消歧/建档，
+                # 仅首次记录状态并主动告警一次，不静默降级。
+                if self.session.set_baby_capability(sid, "unavailable"):
+                    logger.warning(
+                        "宝宝档案能力不可用（LLM provider 不支持结构化输出，如 mock 模式）："
+                        "本会话跳过宝宝建档/归档，仅做产品与育儿问答；配置支持结构化输出的 "
+                        "LLM（ollama/cloud）后可启用。")
 
             # A2 修复：传 baby_profile 给 agent.answer，使 _enrich_query 检索查询融合生效
             ans = await self.agent.answer(

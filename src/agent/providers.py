@@ -117,6 +117,11 @@ def _report_cache_hit(usage: dict) -> Optional[float]:
 
 
 class LLMProvider(ABC):
+    # 该 provider 是否能返回结构化 JSON（宝宝意图消歧/属性抽取依赖）。
+    # mock 等无法返回结构化输出的 provider 置 False，网关据此跳过宝宝建档、
+    # 避免「每轮解析失败→熔断降级」造成的静默能力丢失（PB-3）。
+    supports_structured: bool = True
+
     @abstractmethod
     async def complete(
         self,
@@ -130,6 +135,9 @@ class LLMProvider(ABC):
 
 class MockProvider(LLMProvider):
     """测试用确定性 provider：直接基于检索命中生成回答，便于断言闭环正确性。"""
+
+    # mock 不返回可解析的 JSON，无法支撑宝宝消歧/抽取（PB-3）。
+    supports_structured = False
 
     async def complete(self, messages, retrieved_hits=None,
                        cache_control: bool = False, **kw) -> str:

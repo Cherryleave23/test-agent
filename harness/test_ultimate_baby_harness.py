@@ -345,7 +345,7 @@ class AnswerMockProvider:
 class MockKBStore:
     """空 KB store：返回空命中（测试聚焦于档案归档与回答，非 KB 检索）。"""
 
-    def retrieve(self, query, ent_id, top_k=5):
+    def retrieve(self, query, ent_id, top_k=5, kind_filter=None, kind_weight=None):
         return []
 
 
