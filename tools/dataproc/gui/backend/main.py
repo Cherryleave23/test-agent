@@ -225,6 +225,8 @@ def do_process(name: str = Form(...), selection: str = Form(None),
                                    out_dir=out_dir or None)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -319,9 +321,14 @@ def get_llm_settings():
 @app.post("/settings/llm")
 def update_llm_settings(body: LLMSettings):
     cur = _load_gui_settings()
-    cur["llm"] = body.model_dump()
+    llm = body.model_dump()
+    # 如果 api_key 是脱敏值 "<set>"，保留原有 api_key（用户未重新输入）
+    if llm.get("api_key") == "<set>":
+        old_llm = cur.get("llm", {})
+        llm["api_key"] = old_llm.get("api_key", "")
+    cur["llm"] = llm
     _save_gui_settings(cur)
-    out = dict(body.model_dump())
+    out = dict(llm)
     if out.get("api_key"):
         out["api_key"] = "<set>"
     return out

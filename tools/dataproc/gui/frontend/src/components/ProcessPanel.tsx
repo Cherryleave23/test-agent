@@ -24,7 +24,7 @@ export default function ProcessPanel({ busy, hasSelection, outputDir, status, on
   const [force, setForce] = useState(false);
 
   const pct = status && status.total > 0
-    ? Math.round(((status.processed + status.skipped) / status.total) * 100)
+    ? Math.round((status.processed / status.total) * 100)
     : 0;
 
   const showProgress = busy || (status && status.status === "running");

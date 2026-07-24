@@ -81,7 +81,7 @@ export default function ProcessedPanel({ markers, bundle, onPreviewFile, onOpenE
       >
         <span className="proc-dot">{f.status === "failed" ? "✗" : "✓"}</span>
         <span className="mpath">{rp.split("/").pop()}</span>
-        {f.kind && <span className="kind kind-{f.kind}">{f.kind}</span>}
+        {f.kind && <span className={`kind kind-${f.kind}`}>{f.kind}</span>}
       </div>
     );
   };

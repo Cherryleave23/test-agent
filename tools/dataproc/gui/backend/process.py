@@ -112,8 +112,11 @@ def process(name: str, selection: dict = None, base: str = None,
                 "processed_files": [], "skipped": len(all_files)}
 
     summary = build_bundle(repo_dir, actual_out, selection={"files": to_process})
+    failed_set = set(summary.get("failed_files", []))
     for rel in summary["processed_files"]:
         mark_processed(name, rel, "processed", "bundle", base)
+    for rel in failed_set:
+        mark_processed(name, rel, "failed", "bundle", base)
 
     summary["skipped"] = len(all_files) - len(to_process)
     summary["out_dir"] = actual_out
@@ -129,7 +132,7 @@ def process_async(name: str, selection: dict = None, base: str = None,
     # 如果已有任务在运行，拒绝重复
     cur = progress.get()
     if cur["status"] == "running":
-        return {"error": "已有处理任务在运行", "status": cur}
+        raise RuntimeError("已有处理任务在运行，请等待当前任务完成")
 
     repo_dir, meta = get_repo(name, base)
     _apply_gui_env()
@@ -170,8 +173,11 @@ def process_async(name: str, selection: dict = None, base: str = None,
                 selection={"files": to_process},
                 progress_cb=cb,
             )
+            failed_set = set(summary.get("failed_files", []))
             for rel in summary["processed_files"]:
                 mark_processed(name, rel, "processed", "bundle", base)
+            for rel in failed_set:
+                mark_processed(name, rel, "failed", "bundle", base)
             progress.add_log(
                 f"处理完成: {len(summary['processed_files'])} 个文件, "
                 f"跳过 {skipped} 个"

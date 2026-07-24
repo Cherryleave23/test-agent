@@ -187,12 +187,10 @@ export default function TreePanel({
     // Ctrl+单击 = 仅切换选中，不展开
     if (e.ctrlKey || e.metaKey) {
       onToggleFolder(path);
-      onSetCurrentFolder(path);
       return;
     }
-    // 普通单击 = 设置当前文件夹 + 切换选中 + 展开/折叠
+    // 普通单击 = 设置当前文件夹 + 展开/折叠（不自动选中）
     onSetCurrentFolder(path);
-    onToggleFolder(path);
     if (hasChildren) toggleExpand(path);
   };
 
@@ -201,7 +199,7 @@ export default function TreePanel({
       onToggleFile(path);
       return;
     }
-    onToggleFile(path);
+    // 普通单击 = 预览（不自动选中）
     if (onPreviewFile) onPreviewFile(path);
   };
 

@@ -151,6 +151,8 @@ export default function App() {
     setCurrent(name);
     setSelFiles(new Set());
     setSelFolders(new Set());
+    setBusy(false);
+    setProcStatus(null);
     await loadTree(name);
     await loadProcessed(name);
     await loadRepos();
@@ -178,7 +180,17 @@ export default function App() {
 
   const selectAllInCurrent = () => {
     if (!tree) return;
-    setSelFiles((s) => { const n = new Set(s); tree.files.forEach((f) => n.add(f.path)); return n; });
+    setSelFiles((s) => {
+      const n = new Set(s);
+      const filesInFolder = currentFolder
+        ? tree.files.filter((f) => {
+            const parent = f.path.includes("/") ? f.path.split("/").slice(0, -1).join("/") : "";
+            return parent === currentFolder;
+          })
+        : tree.files.filter((f) => !f.path.includes("/"));
+      filesInFolder.forEach((f) => n.add(f.path));
+      return n;
+    });
   };
 
   const onMkdir = async (parentPath: string, folderName: string) => {
@@ -287,23 +299,34 @@ export default function App() {
       const resp = await api.process(current, selection, force, currentOutputDir || "");
       if (resp.status === "started") {
         setMsg(`处理已启动：${resp.total} 个文件（跳过 ${resp.skipped} 个已处理）`);
-        const poll = async (): Promise<void> => {
-          const s = await api.processStatus();
-          if (s.status === "running") { await new Promise((r) => setTimeout(r, 1500)); return poll(); }
-        };
-        await poll();
-        const final = await api.processStatus();
-        if (final.status === "error") { setMsg("处理失败：" + final.error); }
-        else { setMsg(`处理完成：${final.processed || 0} 个文件，跳过 ${final.skipped || 0} 个`); }
+        // 轮询由 useEffect [busy] 处理，完成时由 procStatus 监听 useEffect 收尾
       } else if (resp.status === "done") {
         setMsg(`全部跳过：${resp.skipped} 个文件已处理且内容未变。`);
+        setBusy(false);
+        await loadProcessed(current);
       } else {
         setMsg(`处理完成：${resp.processed_files?.length || 0} 个文件，跳过 ${resp.skipped || 0} 个`);
+        setBusy(false);
+        await loadProcessed(current);
       }
-      await loadProcessed(current);
-    } catch (e: any) { setMsg("处理失败：" + e.message); }
-    finally { setBusy(false); }
+    } catch (e: any) {
+      setMsg("处理失败：" + e.message);
+      setBusy(false);
+    }
   };
+
+  // 监听处理完成：当 procStatus 变为 done/error 时收尾
+  useEffect(() => {
+    if (procStatus && procStatus.status !== "running" && procStatus.status !== "idle" && busy) {
+      if (procStatus.status === "error") {
+        setMsg("处理失败：" + procStatus.error);
+      } else if (procStatus.status === "done") {
+        setMsg(`处理完成：${procStatus.processed || 0} 个文件，跳过 ${procStatus.skipped || 0} 个`);
+      }
+      setBusy(false);
+      if (current) loadProcessed(current);
+    }
+  }, [procStatus, busy, current]);
 
   const onClearMarkers = async () => {
     if (!current) return;

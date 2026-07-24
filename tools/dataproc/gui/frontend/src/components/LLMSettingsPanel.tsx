@@ -67,6 +67,7 @@ export default function LLMSettingsPanel({ onClose, onSaved }: Props) {
   const save = async () => {
     setSaving(true);
     try {
+      // 直接发送（含 api_key="<set>" 脱敏值）；后端检测到 "<set>" 会保留原值
       const saved = await api.updateLLMSettings(s);
       // 回落脱敏后的 api_key 展示
       setS((prev) => ({ ...prev, api_key: saved.api_key === "<set>" ? prev.api_key : saved.api_key }));

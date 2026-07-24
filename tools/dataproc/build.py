@@ -256,6 +256,8 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None,
     products: List[dict] = []
     corpus: List[dict] = []
     hq_products: List[dict] = []
+    failed_files: List[str] = []
+    succeeded_files: List[str] = []
 
     # 展开选择：只调用一次 expand_selection，复用结果作为 selected 与 processed_files
     if selection is not None:
@@ -317,10 +319,12 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None,
                         product_uid=product_uid, meta=meta, lang="zh").to_dict())
             except Exception as e:
                 logger.error("处理文件失败 %s: %s: %s", rel, type(e).__name__, e)
+                failed_files.append(rel)
                 if progress_cb:
                     progress_cb("error", rel, str(e))
                 continue
 
+            succeeded_files.append(rel)
             if progress_cb:
                 progress_cb("done", rel)
 
@@ -365,4 +369,5 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None,
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-    return {"out_dir": out_dir, "manifest": manifest, "processed_files": processed_files}
+    return {"out_dir": out_dir, "manifest": manifest,
+            "processed_files": succeeded_files, "failed_files": failed_files}
