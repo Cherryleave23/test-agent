@@ -24,6 +24,8 @@ try:
 except ImportError:
     yaml = None  # type: ignore
 
+from .schema_conf import schema_keywords, schema_kind, resolve_schema_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,8 +96,9 @@ def load_category_overrides(conf_path: Optional[str] = None) -> dict:
     """
     global _overrides_cache, _overrides_path, _overrides_mtime
     if not conf_path:
+        env = os.environ.get("DATAPROC_CONF_PATH")
         here = os.path.dirname(os.path.abspath(__file__))
-        conf_path = os.path.join(here, "conf.yaml")
+        conf_path = env or os.path.join(here, "conf.yaml")
     if not os.path.isfile(conf_path) or yaml is None:
         return {}
     # mtime 缓存：路径相同且 mtime 未变时返回缓存
@@ -124,22 +127,43 @@ def load_category_overrides(conf_path: Optional[str] = None) -> dict:
 
 
 def classify(text: str, conf_path: Optional[str] = None) -> dict:
-    """完整分类：返回 {ptype, product_category}。
+    """完整分类：返回 {ptype, product_category, schema, kind}。
 
-    优先使用 conf.yaml 覆盖，缺覆盖时用规则推断。
+    优先级：conf.yaml 覆盖(ptype/关键词→大类) → 自定义 schema keywords
+    （更具体的企业类目，如 probiotic）→ 内置大类规则。
     """
     overrides = load_category_overrides(conf_path)
+    schemas = load_schemas_for_classify(conf_path)
     ptype = classify_ptype(text)
-    # 覆盖逻辑：如果 conf.yaml 有该 ptype 的映射，用映射值
+
+    # 1) 覆盖逻辑：conf.yaml 的 product_categories 映射
     category = ""
     if ptype and ptype in overrides:
         category = overrides[ptype]
     if not category:
-        # 尝试关键词覆盖（最小长度约束，避免单字误匹配）
         for kw, cat in overrides.items():
             if len(kw) >= 2 and kw in text:
                 category = cat
                 break
+
+    # 2) 自定义 schema keywords（更具体，优先于内置大类规则）
+    if not category:
+        for kw, schema_name in schema_keywords(schemas):
+            if kw in text:
+                category = schema_name
+                break
+
+    # 3) 内置大类规则兜底
     if not category:
         category = classify_category(text)
-    return {"ptype": ptype, "product_category": category}
+
+    schema_name = category if category in schemas else resolve_schema_name(category, schemas)
+    kind = schema_kind(category, schemas)
+    return {"ptype": ptype, "product_category": category,
+            "schema": schema_name, "kind": kind}
+
+
+def load_schemas_for_classify(conf_path: Optional[str] = None) -> dict:
+    """延迟加载 schema 表（避免与 classifier 其它路径的循环依赖问题）。"""
+    from .schema_conf import load_schemas
+    return load_schemas(conf_path)

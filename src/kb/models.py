@@ -82,6 +82,8 @@ class NutritionProduct:
     nutrition: str
     highlights: str
     cautions: str           # 注意事项/禁忌
+    active_ingredients: str = ""  # 标志性/功效成分及含量，如「每粒含 DHA 100mg、钙 300mg、益生菌 100 亿 CFU」
+    dosage: str = ""        # 食用量/用法，如「每日 1-2 粒，温水送服」
     keywords: str = ""      # 来源侧打的标签/关键词（差异化检索信号）
     enterprise_id: str = ""
     id: Optional[int] = None
@@ -90,11 +92,12 @@ class NutritionProduct:
         return (
             f"{self.name} {self.brand} {self.category} {self.audience} {self.dosage_form} "
             f"适用{self.age_range} 价格{self.price}元 产地{self.origin} 功效{self.efficacy} "
+            f"功效成分{self.active_ingredients} 食用量{self.dosage} "
             f"{self.highlights} 批号{self.health_license}"
         )
 
     def to_chunks(self) -> list:
-        """语义分块：基础信息 / 成分 / 营养成分 / 卖点 / 注意事项。"""
+        """语义分块：基础信息 / 成分 / 营养成分 / 功效成分 / 食用量 / 卖点 / 注意事项。"""
         base = (
             f"{self.name} {self.brand} {self.category} {self.audience} {self.dosage_form} "
             f"适用{self.age_range} 价格{self.price}元 产地{self.origin} 功效{self.efficacy} "
@@ -105,6 +108,10 @@ class NutritionProduct:
             chunks.append(("成分", f"{self.name} 成分：{self.ingredients}"))
         if self.nutrition:
             chunks.append(("营养成分", f"{self.name} 营养成分：{self.nutrition}"))
+        if self.active_ingredients:
+            chunks.append(("功效成分", f"{self.name} 功效成分及含量：{self.active_ingredients}"))
+        if self.dosage:
+            chunks.append(("食用量", f"{self.name} 食用量/用法：{self.dosage}"))
         if self.cautions:
             chunks.append(("注意事项", f"{self.name} 注意事项：{self.cautions}"))
         return chunks

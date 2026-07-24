@@ -23,7 +23,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, FileResponse
 
 from . import repos, tree, upload, markers, process as proc, progress
-from .models import RepoCreate, SettingsUpdate, LLMSettings
+from .models import RepoCreate, SettingsUpdate, LLMSettings, SchemaUpdate, SchemaField, SchemaDef
 from . import llm_client
 import subprocess
 
@@ -338,6 +338,77 @@ def test_llm_settings(body: LLMSettings):
                   "endpoint": "", "error": f"{type(e).__name__}: {e}",
                   "kind": cfg.get("kind", "none")}
     return result
+
+
+# ---- 产品数据结构（schema）配置页 ----
+def _normalize_schemas_for_ui(schemas: dict) -> dict:
+    """把合并后的 {name: SchemaDef} 规整为前端友好的结构（标注 builtin）。"""
+    from dataproc.schema_conf import _builtin_names
+    builtin = _builtin_names()
+    out: dict = {}
+    for name, spec in schemas.items():
+        out[name] = {
+            "label": spec.get("label", name),
+            "kind": spec.get("kind", "flex"),
+            "extends": spec.get("extends"),
+            "keywords": spec.get("keywords", []) or [],
+            "fields": spec.get("fields", []),
+            "builtin": name in builtin,
+        }
+    return out
+
+
+@app.get("/settings/schema")
+def get_schema_settings():
+    """返回当前产品数据结构（内置默认 + conf.yaml 自定义类目）。"""
+    from dataproc.schema_conf import load_schemas
+    return {"schemas": _normalize_schemas_for_ui(load_schemas())}
+
+
+@app.post("/settings/schema")
+def update_schema_settings(body: SchemaUpdate):
+    """写入 conf.yaml 的 product_schemas 段（企业自定义类目/字段）；保留其余段。
+
+    校验：schema 名与字段 key 须为字母/数字/下划线、非空。
+    """
+    import re as _re
+    _key_pat = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    cleaned: dict = {}
+    for name, spec in (body.schemas or {}).items():
+        if not _key_pat.match(str(name)):
+            raise HTTPException(status_code=400,
+                                detail=f"类目名非法（字母/数字/下划线）：{name}")
+        if isinstance(spec, SchemaDef):
+            spec = spec.model_dump()
+        fields = []
+        for fd in (spec.get("fields") or []):
+            if isinstance(fd, SchemaField):
+                fd = fd.model_dump()
+            key = (fd.get("key") or "").strip()
+            if not key or not _key_pat.match(key):
+                raise HTTPException(status_code=400,
+                                    detail=f"字段 key 非法：{key}")
+            fields.append({
+                "key": key,
+                "label": fd.get("label") or key,
+                "type": fd.get("type") or "text",
+                "required": bool(fd.get("required", False)),
+                "aliases": fd.get("aliases") or [],
+            })
+        cleaned[str(name)] = {
+            "label": spec.get("label") or str(name),
+            "kind": spec.get("kind") or "flex",
+            "extends": spec.get("extends"),
+            "keywords": spec.get("keywords") or [],
+            "fields": fields,
+        }
+    from dataproc.schema_conf import write_product_schemas
+    try:
+        write_product_schemas(cleaned)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"写入 conf.yaml 失败：{e}")
+    from dataproc.schema_conf import load_schemas
+    return {"schemas": _normalize_schemas_for_ui(load_schemas())}
 
 
 # SPA 兜底路由

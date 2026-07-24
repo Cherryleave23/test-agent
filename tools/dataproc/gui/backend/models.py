@@ -42,3 +42,24 @@ class SettingsUpdate(BaseModel):
     output_dir: Optional[str] = None
     repos_base: Optional[str] = None  # 仓库根目录
     llm: Optional[LLMSettings] = None  # 新增：LLM provider 子块
+
+
+class SchemaField(BaseModel):
+    key: str
+    label: str = ""
+    type: str = "text"
+    required: bool = False
+    aliases: Optional[list] = None
+
+
+class SchemaDef(BaseModel):
+    label: str
+    kind: str = "flex"          # milk | nutrition | flex
+    extends: Optional[str] = None
+    keywords: Optional[list] = None
+    fields: list = []           # List[SchemaField]
+
+
+class SchemaUpdate(BaseModel):
+    """POST /settings/schema 的请求体：企业自定义的 product_schemas 段。"""
+    schemas: dict               # {schema_name: SchemaDef-ish}

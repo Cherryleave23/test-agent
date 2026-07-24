@@ -215,19 +215,20 @@ def _process_nontext(repo_dir, rel, full_path, kind, cfg, provider, known, state
     if not content:
         meta["ocr_pending"] = True
     if content and kind == "product_text":
-        st = structure(content, provider)
-        # P3 分类推断：ptype + product_category（规则 + conf.yaml 覆盖）
+        # P3 分类推断：ptype + product_category + kind（规则 + conf.yaml 自定义类目覆盖）
         cls = classify(content)
+        category = cls.get("product_category") or ""
+        st = structure(content, provider, category=category)
         if cls["ptype"]:
             st.fields.setdefault("ptype", cls["ptype"])
-        if cls["product_category"]:
-            st.fields.setdefault("product_category", cls["product_category"])
+        if category:
+            st.fields.setdefault("product_category", category)
         if st.fields:
             r = resolve(st.fields, known)
             product_uid = r["uid"]
             # 范式②：规则与 LLM 在权威/描述字段上冲突 → 标 needs_review（不静默采用任一方）
             prod_status = "needs_review" if st.needs_review else r["status"]
-            prod_kind = "nutrition" if cls.get("product_category") == "营养品" else "milk"
+            prod_kind = cls.get("kind") or ("nutrition" if category == "营养品" else "milk")
             product_dict = ProductRecord(
                 kind=prod_kind, uid=r["uid"], status=prod_status, source_ref=rel,
                 resolved=r["resolved"], fields=st.fields,
@@ -286,7 +287,7 @@ def build_bundle(repo_dir: str, out_dir: str, selection: Optional[dict] = None,
                     uid = ("reg:" + reg) if reg else _detect_product_uid(repo_dir, rel)
                     status = "confirmed" if reg else "pending"
                     cls = classify(body)
-                    prod_kind = "nutrition" if cls.get("product_category") == "营养品" else "milk"
+                    prod_kind = cls.get("kind") or ("nutrition" if cls.get("product_category") == "营养品" else "milk")
                     products.append(ProductRecord(
                         kind=prod_kind, uid=uid, status=status, source_ref=rel,
                         resolved={"match": "reg_number" if reg else "tuple",

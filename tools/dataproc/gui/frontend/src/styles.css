@@ -482,3 +482,41 @@ ul.folders, ul.files, ul.markers { list-style: none; margin: 0; padding: 0; }
 .llm-test-result.fail { background: rgba(248,81,73,0.12); border-color: #f85149; }
 .llm-models { margin-top: 6px; font-size: 11px; color: var(--muted); line-height: 1.5; }
 .llm-err { margin-top: 4px; font-size: 11px; color: var(--warn); word-break: break-all; }
+
+/* ===== 产品数据结构 Schema 配置面板 ===== */
+.schema-modal { max-width: 760px; width: 92vw; max-height: 86vh; overflow-y: auto; }
+.schema-list { display: flex; flex-direction: column; gap: 12px; margin: 10px 0; }
+.schema-card {
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  background: var(--panel2);
+}
+.schema-card.builtin { opacity: .82; border-style: dashed; }
+.schema-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.schema-tag {
+  font-size: 12px; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent); color: #fff;
+}
+.schema-card.builtin .schema-tag { background: var(--muted); }
+.schema-del-cat {
+  margin-left: auto; background: transparent; color: var(--danger);
+  border: 1px solid var(--danger); border-radius: 6px; padding: 2px 8px; cursor: pointer;
+}
+.schema-meta-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.schema-meta-row label { width: 130px; color: var(--muted); font-size: 13px; }
+.schema-meta-row .settings-input { flex: 1; }
+.schema-fields { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.schema-fields-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.schema-add-field, .schema-add-cat {
+  background: var(--panel); color: var(--accent2); border: 1px solid var(--accent2);
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px;
+}
+.schema-add-cat { margin: 4px auto 0; display: block; }
+.schema-field-row { display: flex; gap: 6px; align-items: center; margin: 5px 0; }
+.schema-field-row .sf-key { width: 120px; }
+.schema-field-row .sf-label { flex: 1; }
+.schema-field-row .sf-type { width: 90px; }
+.schema-field-row .sf-req { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 2px; }
+.schema-del-field {
+  background: transparent; color: var(--danger); border: none; cursor: pointer; font-size: 14px;
+}
+.schema-msg { color: var(--accent2); margin-top: 8px; }
